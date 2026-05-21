@@ -272,12 +272,6 @@ function App() {
       return;
     }
 
-    if (settings.apiKey === '') {
-      alert('Please enter an API key in settings');
-      setShowSettings(true);
-      return;
-    }
-
     if (currentSessionId === null) {
       await startNewSession();
     }
@@ -298,7 +292,7 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${settings.apiKey}`,
+          ...(settings.apiKey ? { 'Authorization': `Bearer ${settings.apiKey}` } : {}),
         },
         body: JSON.stringify({
           model: settings.model,
