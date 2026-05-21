@@ -128,27 +128,12 @@ const DEFAULT_SYSTEM_PROMPT = `# 角色
 const MODELS: string[] = [DEFAULT_MODEL, 'gpt-4', 'gpt-4o'];
 
 function loadSettings(): Settings {
-  const saved = localStorage.getItem('chatSettings');
   const defaultModel: string = DEFAULT_MODEL;
-  if (saved !== null) {
-    try {
-      const parsed = JSON.parse(saved) as Settings;
-      const modelValue = parsed.model ?? defaultModel;
-      return {
-        apiKey: parsed.apiKey ?? '',
-        endpoint: parsed.endpoint ?? DEFAULT_ENDPOINT,
-        model: MODELS.includes(modelValue) ? modelValue : defaultModel,
-        systemPrompt: parsed.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
-      };
-    } catch {
-      return { apiKey: '', endpoint: DEFAULT_ENDPOINT, model: defaultModel, systemPrompt: DEFAULT_SYSTEM_PROMPT };
-    }
-  }
   return { apiKey: '', endpoint: DEFAULT_ENDPOINT, model: defaultModel, systemPrompt: DEFAULT_SYSTEM_PROMPT };
 }
 
-function saveSettings(settings: Settings): void {
-  localStorage.setItem('chatSettings', JSON.stringify(settings));
+function saveSettings(_settings: Settings): void {
+  // localStorage disabled
 }
 
 async function fetchSessions(): Promise<Session[]> {
