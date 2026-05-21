@@ -600,8 +600,8 @@ function App() {
         <div className="chat-container" ref={chatContainerRef}>
           <div className="debug-panel">
             <div className="debug-header">{t('Block Execution Log')}</div>
-            {blocklyRef.current?.getOutputLogs()?.length > 0 ? (
-              blocklyRef.current.getOutputLogs().map((log, i) => (
+            {(blocklyRef.current ? blocklyRef.current.getOutputLogs() : []).length > 0 ? (
+              blocklyRef.current!.getOutputLogs().map((log, i) => (
                 <div key={i} className="debug-line">{log}</div>
               ))
             ) : (
@@ -640,7 +640,7 @@ function App() {
               </div>
             )}
             {messages.filter(m => m.role !== 'system').map((msg, idx): JSX.Element => {
-              const parsed = parseThinkingBlocks(msg.content);
+              const parsed = parseThinkingBlocks(msg.content ?? '');
               return (
                 <div key={idx} className={`message ${msg.role}`}>
                   <div className="avatar">{msg.role === 'user' ? t('You') : 'AI'}</div>
