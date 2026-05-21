@@ -7,6 +7,7 @@ export interface BlocklyPanelHandle {
   getContext(): string;
   highlightBlock(ref: string): void;
   suggestCategory(category: string): void;
+  getOutputLogs(): string[];
 }
 
 // ── Sprite state ───────────────────────────────────────────────────
@@ -554,6 +555,9 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle>(function BlocklyPanel
       if (!ws) return;
       const toolbox = ws.getToolbox();
       if (toolbox) toolbox.selectCategoryByName(category);
+    },
+    getOutputLogs() {
+      return [...outputRef.current];
     },
   }), [describeBlockTree]);
 

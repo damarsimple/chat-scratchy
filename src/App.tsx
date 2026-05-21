@@ -226,7 +226,8 @@ function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [expandedThinking, setExpandedThinking] = useState<Set<number>>(new Set());
   const [streamingThinkingExpanded, setStreamingThinkingExpanded] = useState<boolean>(false);
-  const [splitMode, setSplitMode] = useState<boolean>(false);
+  const [mode, setMode] = useState<'learning' | 'task'>('task');
+  const [chatTab, setChatTab] = useState<'discuss' | 'debug' | 'objectives'>('discuss');
   const [chatMinimized, setChatMinimized] = useState<boolean>(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -467,7 +468,7 @@ function App() {
     const userMessage: Message = { role: 'user', content: trimmedInput };
     const systemMessage: Message = { role: 'system', content: settings.systemPrompt };
     const existingMessagesWithoutSystem = messages.filter(m => m.role !== 'system');
-    const tools = splitMode ? SCRATCH_TOOLS : undefined;
+    const tools = mode === 'task' ? SCRATCH_TOOLS : undefined;
 
     let currentMessages: Message[] = [systemMessage, ...existingMessagesWithoutSystem, userMessage];
     setMessages(currentMessages);
@@ -571,90 +572,147 @@ function App() {
 
   const isEmpty = messages.length <= 1;
 
+  const taskObjectives = [
+    { label: 'Move sprite 5 steps', done: false },
+    { label: 'Turn sprite 90 degrees', done: false },
+    { label: 'Say "Hello!" for 2 seconds', done: false },
+  ];
+
+  const renderChatTab = (tab: string, label: string) => (
+    <button
+      key={tab}
+      className={`chat-tab ${chatTab === tab ? 'active' : ''}`}
+      onClick={() => setChatTab(tab as typeof chatTab)}
+    >
+      {label}
+    </button>
+  );
+
   const chatUI = (
     <>
-      <div className="chat-container" ref={chatContainerRef}>
-        {isEmpty && (
-          <div className="empty-state">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
-              <path d="M8 12h8M12 8v8" />
-            </svg>
-            <p>{t('How can I help you today?')}</p>
-          </div>
-        )}
-        {messages.filter(m => m.role !== 'system').map((msg, idx): JSX.Element => {
-          const parsed = parseThinkingBlocks(msg.content);
-          return (
-            <div key={idx} className={`message ${msg.role}`}>
-              <div className="avatar">{msg.role === 'user' ? t('You') : 'AI'}</div>
-              <div className="content">
-                {parsed.thinking && (
-                  <div className="thinking">
-                    <div className="thinking-header" onClick={() => toggleThinking(idx)}>
-                      {expandedThinking.has(idx) ? '▼' : '▶'} {t('Thinking')}
-                    </div>
-                    {expandedThinking.has(idx) && (
-                      <pre className="thinking-content">{parsed.thinking}</pre>
-                    )}
-                  </div>
-                )}
-                {parsed.content && (
-                  <div dangerouslySetInnerHTML={{ __html: renderContent(parsed.content) }} />
-                )}
-              </div>
-            </div>
-          );
-        })}
-        {(isLoading || streamingContent) && (
-          <div className="message bot">
-            <div className="avatar">AI</div>
-            <div className="content">
-              {streamingThinking && (
-                <div className="thinking">
-                  <div className="thinking-header" onClick={() => setStreamingThinkingExpanded(!streamingThinkingExpanded)}>
-                    {streamingThinkingExpanded ? '▼' : '▶'} {t('Thinking...')}
-                  </div>
-                  {streamingThinkingExpanded && (
-                    <pre ref={streamingThinkingRef} className="thinking-content">{streamingThinking}</pre>
-                  )}
-                </div>
-              )}
-              {streamingContent ? (
-                <div dangerouslySetInnerHTML={{ __html: renderContent(streamingContent) }} />
-              ) : (
-                <div className="loading">
-                  <span></span>
-                  <span></span>
-                  <span></span>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+      <div className="chat-tabs">
+        {renderChatTab('discuss', t('Discuss'))}
+        {renderChatTab('debug', t('Debug'))}
+        {renderChatTab('objectives', t('Objectives'))}
       </div>
 
-      <div className="input-container">
-        <div className="input-wrapper">
-          <textarea
-            ref={textareaRef}
-            placeholder={t('Send a message...')}
-            value={input}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            rows={1}
-          />
-          <button
-            className="send-btn"
-            onClick={(): void => { void handleSend(); }}
-            disabled={isLoading || input.trim() === ''}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-            </svg>
-          </button>
+      {chatTab === 'debug' && (
+        <div className="chat-container" ref={chatContainerRef}>
+          <div className="debug-panel">
+            <div className="debug-header">{t('Block Execution Log')}</div>
+            {blocklyRef.current?.getOutputLogs()?.length > 0 ? (
+              blocklyRef.current.getOutputLogs().map((log, i) => (
+                <div key={i} className="debug-line">{log}</div>
+              ))
+            ) : (
+              <div className="debug-empty">{t('No debug output yet. Run a Scratch script to see output here.')}</div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
+
+      {chatTab === 'objectives' && (
+        <div className="chat-container" ref={chatContainerRef}>
+          <div className="objectives-panel">
+            <div className="objectives-header">
+              {mode === 'task' ? t('Task Objectives') : t('Learning Objectives')}
+            </div>
+            {taskObjectives.map((obj, i) => (
+              <label key={i} className="objective-item">
+                <input type="checkbox" defaultChecked={obj.done} />
+                <span>{obj.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {chatTab === 'discuss' && (
+        <>
+          <div className="chat-container" ref={chatContainerRef}>
+            {isEmpty && (
+              <div className="empty-state">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
+                  <path d="M8 12h8M12 8v8" />
+                </svg>
+                <p>{t('How can I help you today?')}</p>
+              </div>
+            )}
+            {messages.filter(m => m.role !== 'system').map((msg, idx): JSX.Element => {
+              const parsed = parseThinkingBlocks(msg.content);
+              return (
+                <div key={idx} className={`message ${msg.role}`}>
+                  <div className="avatar">{msg.role === 'user' ? t('You') : 'AI'}</div>
+                  <div className="content">
+                    {parsed.thinking && (
+                      <div className="thinking">
+                        <div className="thinking-header" onClick={() => toggleThinking(idx)}>
+                          {expandedThinking.has(idx) ? '▼' : '▶'} {t('Thinking')}
+                        </div>
+                        {expandedThinking.has(idx) && (
+                          <pre className="thinking-content">{parsed.thinking}</pre>
+                        )}
+                      </div>
+                    )}
+                    {parsed.content && (
+                      <div dangerouslySetInnerHTML={{ __html: renderContent(parsed.content) }} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {(isLoading || streamingContent) && (
+              <div className="message bot">
+                <div className="avatar">AI</div>
+                <div className="content">
+                  {streamingThinking && (
+                    <div className="thinking">
+                      <div className="thinking-header" onClick={() => setStreamingThinkingExpanded(!streamingThinkingExpanded)}>
+                        {streamingThinkingExpanded ? '▼' : '▶'} {t('Thinking...')}
+                      </div>
+                      {streamingThinkingExpanded && (
+                        <pre ref={streamingThinkingRef} className="thinking-content">{streamingThinking}</pre>
+                      )}
+                    </div>
+                  )}
+                  {streamingContent ? (
+                    <div dangerouslySetInnerHTML={{ __html: renderContent(streamingContent) }} />
+                  ) : (
+                    <div className="loading">
+                      <span></span>
+                      <span></span>
+                      <span></span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="input-container">
+            <div className="input-wrapper">
+              <textarea
+                ref={textareaRef}
+                placeholder={t('Send a message...')}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                rows={1}
+              />
+              <button
+                className="send-btn"
+                onClick={(): void => { void handleSend(); }}
+                disabled={isLoading || input.trim() === ''}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 
@@ -675,9 +733,9 @@ function App() {
         </button>
         <button
           className="settings-toggle"
-          onClick={(): void => setSplitMode(!splitMode)}
+          onClick={(): void => setMode(mode === 'learning' ? 'task' : 'learning')}
         >
-          {splitMode ? '⊟' : '⊞'} {t('Split')}
+          {mode === 'task' ? '📘' : '🧩'} {mode === 'learning' ? t('Task Mode') : t('Learning Mode')}
         </button>
         <button className="settings-toggle" onClick={toggleLang}>
           {lang === 'zh' ? 'EN' : '中'}
@@ -736,7 +794,7 @@ function App() {
         </div>
       )}
 
-      {splitMode ? (
+      {mode === 'task' ? (
         <div className="scratch-full">
           <BlocklyPanel ref={blocklyRef} />
           <div className={`floating-chat ${chatMinimized ? 'minimized' : ''}`}>
