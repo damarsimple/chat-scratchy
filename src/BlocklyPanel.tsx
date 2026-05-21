@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
 import * as Blockly from 'blockly';
 import 'blockly/blocks';
 import { javascriptGenerator } from 'blockly/javascript';
@@ -195,20 +195,20 @@ defineBlock('scratch_keypressed', {
 
 javascriptGenerator.forBlock['scratch_movesteps'] = function (b) {
   const v = javascriptGenerator.valueToCode(b, 'STEPS', javascriptGenerator.ORDER_NONE) || '0';
-  return `window.__scratchMove(${v});\n`;
+  return `await window.__scratchMove(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_turnright'] = function (b) {
   const v = javascriptGenerator.valueToCode(b, 'DEGREES', javascriptGenerator.ORDER_NONE) || '0';
-  return `window.__scratchTurn(${v});\n`;
+  return `await window.__scratchTurn(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_turnleft'] = function (b) {
   const v = javascriptGenerator.valueToCode(b, 'DEGREES', javascriptGenerator.ORDER_NONE) || '0';
-  return `window.__scratchTurn(-${v});\n`;
+  return `await window.__scratchTurn(-${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_goto'] = function (b) {
   const x = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.ORDER_NONE) || '0';
   const y = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.ORDER_NONE) || '0';
-  return `window.__scratchGoTo(${x}, ${y});\n`;
+  return `await window.__scratchGoTo(${x}, ${y});\n`;
 };
 javascriptGenerator.forBlock['scratch_glide'] = function (b) {
   const s = javascriptGenerator.valueToCode(b, 'SECS', javascriptGenerator.ORDER_NONE) || '1';
@@ -218,22 +218,22 @@ javascriptGenerator.forBlock['scratch_glide'] = function (b) {
 };
 javascriptGenerator.forBlock['scratch_changex'] = function (b) {
   const v = javascriptGenerator.valueToCode(b, 'DX', javascriptGenerator.ORDER_NONE) || '0';
-  return `window.__scratchChangeX(${v});\n`;
+  return `await window.__scratchChangeX(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_setx'] = function (b) {
   const v = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.ORDER_NONE) || '0';
-  return `window.__scratchSetX(${v});\n`;
+  return `await window.__scratchSetX(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_changey'] = function (b) {
   const v = javascriptGenerator.valueToCode(b, 'DY', javascriptGenerator.ORDER_NONE) || '0';
-  return `window.__scratchChangeY(${v});\n`;
+  return `await window.__scratchChangeY(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_sety'] = function (b) {
   const v = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.ORDER_NONE) || '0';
-  return `window.__scratchSetY(${v});\n`;
+  return `await window.__scratchSetY(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_ifonedgebounce'] = function () {
-  return 'window.__scratchBounce();\n';
+  return 'await window.__scratchBounce();\n';
 };
 javascriptGenerator.forBlock['scratch_xposition'] = function () {
   return ['window.__scratchPos().x', javascriptGenerator.ORDER_MEMBER];
@@ -254,18 +254,18 @@ javascriptGenerator.forBlock['scratch_sayseconds'] = function (b) {
   return `await window.__scratchSaySeconds(${t}, ${s});\n`;
 };
 javascriptGenerator.forBlock['scratch_show'] = function () {
-  return 'window.__scratchShow();\n';
+  return 'await window.__scratchShow();\n';
 };
 javascriptGenerator.forBlock['scratch_hide'] = function () {
-  return 'window.__scratchHide();\n';
+  return 'await window.__scratchHide();\n';
 };
 javascriptGenerator.forBlock['scratch_changesize'] = function (b) {
   const v = javascriptGenerator.valueToCode(b, 'DELTA', javascriptGenerator.ORDER_NONE) || '0';
-  return `window.__scratchChangeSize(${v});\n`;
+  return `await window.__scratchChangeSize(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_setsize'] = function (b) {
   const v = javascriptGenerator.valueToCode(b, 'SIZE', javascriptGenerator.ORDER_NONE) || '100';
-  return `window.__scratchSetSize(${v});\n`;
+  return `await window.__scratchSetSize(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_size'] = function () {
   return ['window.__scratchPos().size', javascriptGenerator.ORDER_MEMBER];
@@ -564,59 +564,66 @@ export function BlocklyPanel() {
     window.__scratchMousePos = () => mouseRef.current;
     window.__scratchKeyPressed = (k: string) => keysRef.current.has(k);
 
-    window.__scratchMove = (steps: number) => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchMove = (steps: number) => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       const rad = s.direction * Math.PI / 180;
       s.x += steps * Math.sin(rad);
       s.y += steps * Math.cos(rad);
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
-    window.__scratchTurn = (deg: number) => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchTurn = (deg: number) => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       s.direction = ((s.direction + deg) % 360 + 360) % 360;
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
-    window.__scratchGoTo = (x: number, y: number) => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchGoTo = (x: number, y: number) => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       s.x = x; s.y = y;
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
-    window.__scratchChangeX = (dx: number) => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchChangeX = (dx: number) => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       s.x += dx;
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
-    window.__scratchSetX = (x: number) => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchSetX = (x: number) => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       s.x = x;
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
-    window.__scratchChangeY = (dy: number) => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchChangeY = (dy: number) => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       s.y += dy;
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
-    window.__scratchSetY = (y: number) => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchSetY = (y: number) => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       s.y = y;
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
-    window.__scratchBounce = () => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchBounce = () => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       const margin = 25 * (s.size / 100);
       const half = COORD_RANGE - margin;
       if (s.x > half) { s.x = half; s.direction = 180 - s.direction; }
@@ -626,7 +633,8 @@ export function BlocklyPanel() {
       s.direction = ((s.direction % 360) + 360) % 360;
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
     window.__scratchGlide = (secs: number, tx: number, ty: number) =>
       new Promise<void>((resolve, reject) => {
@@ -663,33 +671,37 @@ export function BlocklyPanel() {
         }, secs * 1000);
       });
 
-    window.__scratchShow = () => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchShow = () => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       s.visible = true;
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
-    window.__scratchHide = () => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchHide = () => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       s.visible = false;
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
-    window.__scratchChangeSize = (delta: number) => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchChangeSize = (delta: number) => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       s.size = Math.max(5, s.size + delta);
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
-    window.__scratchSetSize = (size: number) => {
-      if (sig.aborted) throw Error('STOPPED');
+    window.__scratchSetSize = (size: number) => new Promise<void>((resolve, reject) => {
+      if (sig.aborted) return reject(Error('STOPPED'));
       s.size = Math.max(5, size);
       renderCanvas();
       setSprite({ ...s });
-    };
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
 
     window.__scratchWait = (seconds: number) =>
       new Promise<void>((resolve, reject) => {

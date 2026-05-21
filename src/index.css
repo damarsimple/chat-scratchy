@@ -103,11 +103,102 @@ body {
   flex-wrap: wrap;
 }
 
-.main-content {
+.scratch-full {
   flex: 1;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   min-height: 0;
+  position: relative;
+}
+
+.floating-chat {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  width: 380px;
+  height: 520px;
+  background: var(--bg-input);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  z-index: 200;
+  overflow: hidden;
+  transition: height 0.2s ease;
+}
+
+.floating-chat.minimized {
+  height: auto;
+}
+
+.floating-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--accent-gradient);
+  color: white;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+
+.floating-chat-toggle {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.15s;
+}
+
+.floating-chat-toggle:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.floating-chat-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.floating-chat-body .chat-container {
+  padding: 12px;
+  gap: 12px;
+}
+
+.floating-chat-body .input-container {
+  padding: 12px;
+}
+
+.floating-chat-body .message {
+  padding: 10px 14px;
+  gap: 10px;
+}
+
+.floating-chat-body .message.bot {
+  background: #FFF8F0;
+}
+
+.floating-chat-body .message.user {
+  background: #EDE9FE;
+}
+
+.floating-chat-body .avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
 }
 
 .scratch-panel {
@@ -418,7 +509,8 @@ textarea::placeholder {
 .send-btn {
   position: absolute;
   right: 8px;
-  bottom: 8px;
+  top: 50%;
+  transform: translateY(-50%);
   background: var(--accent-gradient);
   border: none;
   color: white;
@@ -434,18 +526,18 @@ textarea::placeholder {
 }
 
 .send-btn:hover {
-  transform: scale(1.1);
+  transform: translateY(-50%) scale(1.1);
   box-shadow: var(--shadow-md);
 }
 
 .send-btn:active {
-  transform: scale(0.95);
+  transform: translateY(-50%) scale(0.95);
 }
 
 .send-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-  transform: none;
+  transform: translateY(-50%);
   box-shadow: none;
 }
 

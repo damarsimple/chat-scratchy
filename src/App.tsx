@@ -218,6 +218,7 @@ function App() {
   const [expandedThinking, setExpandedThinking] = useState<Set<number>>(new Set());
   const [streamingThinkingExpanded, setStreamingThinkingExpanded] = useState<boolean>(false);
   const [splitMode, setSplitMode] = useState<boolean>(false);
+  const [chatMinimized, setChatMinimized] = useState<boolean>(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamingThinkingRef = useRef<HTMLPreElement>(null);
@@ -592,11 +593,19 @@ function App() {
       )}
 
       {splitMode ? (
-        <div className="main-content">
-          <div className="scratch-panel">
-            <BlocklyPanel />
+        <div className="scratch-full">
+          <BlocklyPanel />
+          <div className={`floating-chat ${chatMinimized ? 'minimized' : ''}`}>
+            <div className="floating-chat-header" onClick={() => setChatMinimized(!chatMinimized)}>
+              <span>{t('Chats')}</span>
+              <button className="floating-chat-toggle" onClick={(e) => { e.stopPropagation(); setChatMinimized(!chatMinimized); }}>
+                {chatMinimized ? '+' : '−'}
+              </button>
+            </div>
+            {!chatMinimized && (
+              <div className="floating-chat-body">{chatUI}</div>
+            )}
           </div>
-          <div className="chat-panel">{chatUI}</div>
         </div>
       ) : chatUI}
     </div>
