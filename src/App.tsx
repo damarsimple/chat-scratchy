@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
 import type { JSX } from 'react';
 import { marked } from 'marked';
+import { useI18n } from './i18n';
 
 interface Message {
   role: 'system' | 'user' | 'assistant';
@@ -215,6 +216,7 @@ function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [expandedThinking, setExpandedThinking] = useState<Set<number>>(new Set());
   const [streamingThinkingExpanded, setStreamingThinkingExpanded] = useState<boolean>(false);
+  const [splitMode, setSplitMode] = useState<boolean>(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamingThinkingRef = useRef<HTMLPreElement>(null);
@@ -375,8 +377,8 @@ function App() {
         void loadSessionsList();
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      setMessages([...newMessages, { role: 'assistant', content: `Error: ${errorMessage}` }]);
+      const errorMessage = err instanceof Error ? err.message : t('Unknown error');
+      setMessages([...newMessages, { role: 'assistant', content: `${t('Error')}: ${errorMessage}` }]);
     }
 
     setIsLoading(false);
@@ -419,77 +421,12 @@ function App() {
     return marked.parse(content, { async: false }) as string;
   };
 
+  const { t, lang, toggleLang } = useI18n();
+
   const isEmpty = messages.length <= 1;
 
-  return (
-    <div className="app">
-      <header className="header">
-        <button
-          className="sessions-toggle"
-          onClick={(): void => setShowSessions(!showSessions)}
-        >
-          {showSessions ? '✕' : '☰'} Chats
-        </button>
-        <button
-          className="settings-toggle"
-          onClick={(): void => setShowSettings(!showSettings)}
-        >
-          ⚙ Settings
-        </button>
-        <select
-          value={settings.model}
-          onChange={(e: React.ChangeEvent<HTMLSelectElement>): void => updateSetting('model', e.target.value)}
-        >
-          {MODELS.map((model): JSX.Element => (
-            <option key={model} value={model}>{model}</option>
-          ))}
-        </select>
-        {showSettings && (
-          <div className="settings-panel">
-            <input
-              type="password"
-              placeholder="API Key"
-              value={settings.apiKey}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>): void => updateSetting('apiKey', e.target.value)}
-            />
-            <input
-              type="text"
-              placeholder="Endpoint URL"
-              value={settings.endpoint}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>): void => updateSetting('endpoint', e.target.value)}
-            />
-            <button className="new-chat-btn" onClick={(): Promise<void> => startNewSession()}>
-              + New Chat
-            </button>
-          </div>
-        )}
-      </header>
-
-      {showSessions && (
-        <div className="sessions-sidebar">
-          <button className="new-chat-btn" onClick={(): Promise<void> => startNewSession()}>
-            + New Chat
-          </button>
-          <div className="sessions-list">
-            {sessions.map((session): JSX.Element => (
-              <div
-                key={session.id}
-                className={`session-item ${currentSessionId === session.id ? 'active' : ''}`}
-                onClick={(): Promise<void> => loadSession(session.id)}
-              >
-                <span className="session-title">{session.title}</span>
-                <button
-                  className="session-delete"
-                  onClick={(e: React.MouseEvent): Promise<void> => handleDeleteSession(session.id, e)}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
+  const chatUI = (
+    <>
       <div className="chat-container" ref={chatContainerRef}>
         {isEmpty && (
           <div className="empty-state">
@@ -497,19 +434,19 @@ function App() {
               <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
               <path d="M8 12h8M12 8v8" />
             </svg>
-            <p>How can I help you today?</p>
+            <p>{t('How can I help you today?')}</p>
           </div>
         )}
         {messages.filter(m => m.role !== 'system').map((msg, idx): JSX.Element => {
           const parsed = parseThinkingBlocks(msg.content);
           return (
             <div key={idx} className={`message ${msg.role}`}>
-              <div className="avatar">{msg.role === 'user' ? 'You' : 'AI'}</div>
+              <div className="avatar">{msg.role === 'user' ? t('You') : 'AI'}</div>
               <div className="content">
                 {parsed.thinking && (
                   <div className="thinking">
                     <div className="thinking-header" onClick={() => toggleThinking(idx)}>
-                      {expandedThinking.has(idx) ? '▼' : '▶'} Thinking
+                      {expandedThinking.has(idx) ? '▼' : '▶'} {t('Thinking')}
                     </div>
                     {expandedThinking.has(idx) && (
                       <pre className="thinking-content">{parsed.thinking}</pre>
@@ -530,7 +467,7 @@ function App() {
               {streamingThinking && (
                 <div className="thinking">
                   <div className="thinking-header" onClick={() => setStreamingThinkingExpanded(!streamingThinkingExpanded)}>
-                    {streamingThinkingExpanded ? '▼' : '▶'} Thinking...
+                    {streamingThinkingExpanded ? '▼' : '▶'} {t('Thinking...')}
                   </div>
                   {streamingThinkingExpanded && (
                     <pre ref={streamingThinkingRef} className="thinking-content">{streamingThinking}</pre>
@@ -555,7 +492,7 @@ function App() {
         <div className="input-wrapper">
           <textarea
             ref={textareaRef}
-            placeholder="Send a message..."
+            placeholder={t('Send a message...')}
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
@@ -572,6 +509,93 @@ function App() {
           </button>
         </div>
       </div>
+    </>
+  );
+
+  return (
+    <div className="app">
+      <header className="header">
+        <button
+          className="sessions-toggle"
+          onClick={(): void => setShowSessions(!showSessions)}
+        >
+          {showSessions ? '✕' : '☰'} {t('Chats')}
+        </button>
+        <button
+          className="settings-toggle"
+          onClick={(): void => setShowSettings(!showSettings)}
+        >
+          ⚙ {t('Settings')}
+        </button>
+        <button
+          className="settings-toggle"
+          onClick={(): void => setSplitMode(!splitMode)}
+        >
+          {splitMode ? '⊟' : '⊞'} {t('Split')}
+        </button>
+        <button className="settings-toggle" onClick={toggleLang}>
+          {lang === 'zh' ? 'EN' : '中'}
+        </button>
+        <select
+          value={settings.model}
+          onChange={(e: React.ChangeEvent<HTMLSelectElement>): void => updateSetting('model', e.target.value)}
+        >
+          {MODELS.map((model): JSX.Element => (
+            <option key={model} value={model}>{model}</option>
+          ))}
+        </select>
+        {showSettings && (
+          <div className="settings-panel">
+            <input
+              type="password"
+              placeholder={t('API Key')}
+              value={settings.apiKey}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>): void => updateSetting('apiKey', e.target.value)}
+            />
+            <input
+              type="text"
+              placeholder={t('Endpoint URL')}
+              value={settings.endpoint}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>): void => updateSetting('endpoint', e.target.value)}
+            />
+            <button className="new-chat-btn" onClick={(): Promise<void> => startNewSession()}>
+              {t('+ New Chat')}
+            </button>
+          </div>
+        )}
+      </header>
+
+      {showSessions && (
+        <div className="sessions-sidebar">
+          <button className="new-chat-btn" onClick={(): Promise<void> => startNewSession()}>
+            {t('+ New Chat')}
+          </button>
+          <div className="sessions-list">
+            {sessions.map((session): JSX.Element => (
+              <div
+                key={session.id}
+                className={`session-item ${currentSessionId === session.id ? 'active' : ''}`}
+                onClick={(): Promise<void> => loadSession(session.id)}
+              >
+                <span className="session-title">{session.title}</span>
+                <button
+                  className="session-delete"
+                  onClick={(e: React.MouseEvent): Promise<void> => handleDeleteSession(session.id, e)}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {splitMode ? (
+        <div className="main-content">
+          <div className="scratch-panel" />
+          <div className="chat-panel">{chatUI}</div>
+        </div>
+      ) : chatUI}
     </div>
   );
 }

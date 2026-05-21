@@ -79,6 +79,26 @@ body {
   flex-wrap: wrap;
 }
 
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+}
+
+.scratch-panel {
+  flex: 7;
+  background: var(--bg-primary);
+  border-right: 1px solid var(--border);
+}
+
+.chat-panel {
+  flex: 3;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .chat-container {
   flex: 1;
   overflow-y: auto;
@@ -370,6 +390,12 @@ textarea:focus {
   color: #f59e0b;
   font-weight: 600;
   margin-bottom: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.thinking-header:hover {
+  opacity: 0.8;
 }
 
 .thinking-content {
