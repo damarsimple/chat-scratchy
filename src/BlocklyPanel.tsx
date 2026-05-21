@@ -201,63 +201,63 @@ defineBlock('scratch_keypressed', {
 // ── JavaScript generators ──────────────────────────────────────────
 
 javascriptGenerator.forBlock['scratch_movesteps'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'STEPS', javascriptGenerator.ORDER_NONE) || '0';
+  const v = javascriptGenerator.valueToCode(b, 'STEPS', javascriptGenerator.Order.NONE) || '0';
   return `await window.__scratchMove(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_turnright'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'DEGREES', javascriptGenerator.ORDER_NONE) || '0';
+  const v = javascriptGenerator.valueToCode(b, 'DEGREES', javascriptGenerator.Order.NONE) || '0';
   return `await window.__scratchTurn(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_turnleft'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'DEGREES', javascriptGenerator.ORDER_NONE) || '0';
+  const v = javascriptGenerator.valueToCode(b, 'DEGREES', javascriptGenerator.Order.NONE) || '0';
   return `await window.__scratchTurn(-${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_goto'] = function (b) {
-  const x = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.ORDER_NONE) || '0';
-  const y = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.ORDER_NONE) || '0';
+  const x = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.Order.NONE) || '0';
+  const y = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.Order.NONE) || '0';
   return `await window.__scratchGoTo(${x}, ${y});\n`;
 };
 javascriptGenerator.forBlock['scratch_glide'] = function (b) {
-  const s = javascriptGenerator.valueToCode(b, 'SECS', javascriptGenerator.ORDER_NONE) || '1';
-  const x = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.ORDER_NONE) || '0';
-  const y = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.ORDER_NONE) || '0';
+  const s = javascriptGenerator.valueToCode(b, 'SECS', javascriptGenerator.Order.NONE) || '1';
+  const x = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.Order.NONE) || '0';
+  const y = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.Order.NONE) || '0';
   return `await window.__scratchGlide(${s}, ${x}, ${y});\n`;
 };
 javascriptGenerator.forBlock['scratch_changex'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'DX', javascriptGenerator.ORDER_NONE) || '0';
+  const v = javascriptGenerator.valueToCode(b, 'DX', javascriptGenerator.Order.NONE) || '0';
   return `await window.__scratchChangeX(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_setx'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.ORDER_NONE) || '0';
+  const v = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.Order.NONE) || '0';
   return `await window.__scratchSetX(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_changey'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'DY', javascriptGenerator.ORDER_NONE) || '0';
+  const v = javascriptGenerator.valueToCode(b, 'DY', javascriptGenerator.Order.NONE) || '0';
   return `await window.__scratchChangeY(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_sety'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.ORDER_NONE) || '0';
+  const v = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.Order.NONE) || '0';
   return `await window.__scratchSetY(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_ifonedgebounce'] = function () {
   return 'await window.__scratchBounce();\n';
 };
 javascriptGenerator.forBlock['scratch_xposition'] = function () {
-  return ['window.__scratchPos().x', javascriptGenerator.ORDER_MEMBER];
+  return ['window.__scratchPos().x', javascriptGenerator.Order.MEMBER];
 };
 javascriptGenerator.forBlock['scratch_yposition'] = function () {
-  return ['window.__scratchPos().y', javascriptGenerator.ORDER_MEMBER];
+  return ['window.__scratchPos().y', javascriptGenerator.Order.MEMBER];
 };
 javascriptGenerator.forBlock['scratch_direction'] = function () {
-  return ['window.__scratchPos().direction', javascriptGenerator.ORDER_MEMBER];
+  return ['window.__scratchPos().direction', javascriptGenerator.Order.MEMBER];
 };
 javascriptGenerator.forBlock['scratch_says'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'TEXT', javascriptGenerator.ORDER_NONE);
+  const v = javascriptGenerator.valueToCode(b, 'TEXT', javascriptGenerator.Order.NONE);
   return `window.__scratchSay(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_sayseconds'] = function (b) {
-  const t = javascriptGenerator.valueToCode(b, 'TEXT', javascriptGenerator.ORDER_NONE);
-  const s = javascriptGenerator.valueToCode(b, 'SECS', javascriptGenerator.ORDER_NONE) || '2';
+  const t = javascriptGenerator.valueToCode(b, 'TEXT', javascriptGenerator.Order.NONE);
+  const s = javascriptGenerator.valueToCode(b, 'SECS', javascriptGenerator.Order.NONE) || '2';
   return `await window.__scratchSaySeconds(${t}, ${s});\n`;
 };
 javascriptGenerator.forBlock['scratch_show'] = function () {
@@ -267,34 +267,34 @@ javascriptGenerator.forBlock['scratch_hide'] = function () {
   return 'await window.__scratchHide();\n';
 };
 javascriptGenerator.forBlock['scratch_changesize'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'DELTA', javascriptGenerator.ORDER_NONE) || '0';
+  const v = javascriptGenerator.valueToCode(b, 'DELTA', javascriptGenerator.Order.NONE) || '0';
   return `await window.__scratchChangeSize(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_setsize'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'SIZE', javascriptGenerator.ORDER_NONE) || '100';
+  const v = javascriptGenerator.valueToCode(b, 'SIZE', javascriptGenerator.Order.NONE) || '100';
   return `await window.__scratchSetSize(${v});\n`;
 };
 javascriptGenerator.forBlock['scratch_size'] = function () {
-  return ['window.__scratchPos().size', javascriptGenerator.ORDER_MEMBER];
+  return ['window.__scratchPos().size', javascriptGenerator.Order.MEMBER];
 };
 javascriptGenerator.forBlock['scratch_touchingmouse'] = function () {
-  return ['window.__scratchTouchingMouse()', javascriptGenerator.ORDER_MEMBER];
+  return ['window.__scratchTouchingMouse()', javascriptGenerator.Order.MEMBER];
 };
 javascriptGenerator.forBlock['scratch_touchingedge'] = function () {
-  return ['window.__scratchTouchingEdge()', javascriptGenerator.ORDER_MEMBER];
+  return ['window.__scratchTouchingEdge()', javascriptGenerator.Order.MEMBER];
 };
 javascriptGenerator.forBlock['scratch_distancetomouse'] = function () {
-  return ['window.__scratchDistToMouse()', javascriptGenerator.ORDER_MEMBER];
+  return ['window.__scratchDistToMouse()', javascriptGenerator.Order.MEMBER];
 };
 javascriptGenerator.forBlock['scratch_mousex'] = function () {
-  return ['window.__scratchMousePos().x', javascriptGenerator.ORDER_MEMBER];
+  return ['window.__scratchMousePos().x', javascriptGenerator.Order.MEMBER];
 };
 javascriptGenerator.forBlock['scratch_mousey'] = function () {
-  return ['window.__scratchMousePos().y', javascriptGenerator.ORDER_MEMBER];
+  return ['window.__scratchMousePos().y', javascriptGenerator.Order.MEMBER];
 };
 javascriptGenerator.forBlock['scratch_keypressed'] = function (b) {
   const key = b.getFieldValue('KEY');
-  return [`window.__scratchKeyPressed('${key}')`, javascriptGenerator.ORDER_MEMBER];
+  return [`window.__scratchKeyPressed('${key}')`, javascriptGenerator.Order.MEMBER];
 };
 
 // ── Toolbox ────────────────────────────────────────────────────────
@@ -489,7 +489,7 @@ Blockly.Blocks['scratch_wait'] = {
 };
 
 javascriptGenerator.forBlock['scratch_wait'] = function (block) {
-  const seconds = javascriptGenerator.valueToCode(block, 'SECONDS', javascriptGenerator.ORDER_NONE) || '1';
+  const seconds = javascriptGenerator.valueToCode(block, 'SECONDS', javascriptGenerator.Order.NONE) || '1';
   return `await window.__scratchWait(${seconds});\n`;
 };
 
