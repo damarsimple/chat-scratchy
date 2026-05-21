@@ -20,14 +20,22 @@ interface Session {
   updatedAt: string;
 }
 
-const DEFAULT_ENDPOINT = import.meta.env.VITE_API_ENDPOINT ?? 'http://localhost:8083/v1/chat/completions';
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:3001/api';
+const DEFAULT_ENDPOINT = import.meta.env.VITE_API_ENDPOINT ?? '/api/chat/completions';
+const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
 const DEFAULT_MODEL = import.meta.env.VITE_DEFAULT_MODEL ?? 'gpt-3.5-turbo';
 
 const DEFAULT_SYSTEM_PROMPT = `# 角色
 你是一位友善的程式設計輔導助理，專門設計來幫助學生學習 Scratch 和積木式程式設計。你的名字是 [應用程式名稱]。
 
 你唯一的任務是幫助學生學習如何思考並將想法拆解成程式邏輯——而不是替他們解決問題。
+
+---
+
+# 語言規則（最高優先級）
+**你必須永遠使用繁體中文（正體中文）回覆，無一例外。**
+- 無論學生用什麼語言發言（英文、日文、其他語言），你的回覆一律使用繁體中文。
+- 如果學生用英文提問，用繁體中文回答，不需要解釋為什麼。
+- 這條規則的優先級高於所有其他規則，任何情況下都不得切換成其他語言。
 
 ---
 
@@ -205,8 +213,11 @@ function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [showSessions, setShowSessions] = useState<boolean>(false);
   const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [expandedThinking, setExpandedThinking] = useState<Set<number>>(new Set());
+  const [streamingThinkingExpanded, setStreamingThinkingExpanded] = useState<boolean>(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const streamingThinkingRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
     void loadSessionsList();
@@ -217,6 +228,12 @@ function App() {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [messages, isLoading, streamingContent, streamingThinking]);
+
+  useEffect(() => {
+    if (streamingThinkingRef.current) {
+      streamingThinkingRef.current.scrollTop = streamingThinkingRef.current.scrollHeight;
+    }
+  }, [streamingThinking]);
 
   const loadSessionsList = async (): Promise<void> => {
     try {
@@ -367,6 +384,15 @@ function App() {
     setStreamingThinking('');
   };
 
+  const toggleThinking = (idx: number): void => {
+    setExpandedThinking(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -482,8 +508,12 @@ function App() {
               <div className="content">
                 {parsed.thinking && (
                   <div className="thinking">
-                    <div className="thinking-header">Thinking</div>
-                    <pre className="thinking-content">{parsed.thinking}</pre>
+                    <div className="thinking-header" onClick={() => toggleThinking(idx)}>
+                      {expandedThinking.has(idx) ? '▼' : '▶'} Thinking
+                    </div>
+                    {expandedThinking.has(idx) && (
+                      <pre className="thinking-content">{parsed.thinking}</pre>
+                    )}
                   </div>
                 )}
                 {parsed.content && (
@@ -499,8 +529,12 @@ function App() {
             <div className="content">
               {streamingThinking && (
                 <div className="thinking">
-                  <div className="thinking-header">Thinking...</div>
-                  <pre className="thinking-content">{streamingThinking}</pre>
+                  <div className="thinking-header" onClick={() => setStreamingThinkingExpanded(!streamingThinkingExpanded)}>
+                    {streamingThinkingExpanded ? '▼' : '▶'} Thinking...
+                  </div>
+                  {streamingThinkingExpanded && (
+                    <pre ref={streamingThinkingRef} className="thinking-content">{streamingThinking}</pre>
+                  )}
                 </div>
               )}
               {streamingContent ? (
