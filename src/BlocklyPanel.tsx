@@ -3,6 +3,12 @@ import * as Blockly from 'blockly';
 import 'blockly/blocks';
 import { javascriptGenerator } from 'blockly/javascript';
 
+export interface BlocklyPanelHandle {
+  getContext(): string;
+  highlightBlock(ref: string): void;
+  suggestCategory(category: string): void;
+}
+
 // ── Sprite state ───────────────────────────────────────────────────
 
 interface SpriteState {
@@ -488,7 +494,7 @@ javascriptGenerator.forBlock['scratch_wait'] = function (block) {
 
 // ── Component ──────────────────────────────────────────────────────
 
-export function BlocklyPanel() {
+export const BlocklyPanel = forwardRef<BlocklyPanelHandle>(function BlocklyPanel(_, ref) {
   const [output, setOutput] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [sprite, setSprite] = useState<SpriteState>(defaultSprite);
@@ -503,6 +509,53 @@ export function BlocklyPanel() {
   const keysRef = useRef<Set<string>>(new Set());
   const mouseRef = useRef({ x: 0, y: 0 });
   const outputRef = useRef<string[]>([]);
+  const blockRefsMap = useRef<Map<string, string>>(new Map());
+
+  const describeBlockTree = useCallback((block: Blockly.Block, indent: number = 0): string => {
+    const pad = '  '.repeat(indent);
+    let result = pad + '→ ' + block.toString() + '\n';
+    for (const input of block.inputList) {
+      const target = input.connection?.targetBlock();
+      if (target) result += describeBlockTree(target, indent + 1);
+    }
+    const next = block.nextConnection?.targetBlock();
+    if (next) result += describeBlockTree(next, indent);
+    return result;
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    getContext() {
+      const ws = workspace.current;
+      if (!ws) return 'Scratch pad: not initialized';
+      const s = spriteRef.current;
+      const topBlocks = ws.getTopBlocks(true);
+      blockRefsMap.current.clear();
+      let result = `Sprite: x=${Math.round(s.x)}, y=${Math.round(s.y)}, dir=${Math.round(s.direction)}, size=${s.size}%, visible=${s.visible}\n\nBlocks:\n`;
+      topBlocks.forEach((block, i) => {
+        const refId = `#ref${i + 1}`;
+        blockRefsMap.current.set(block.id, refId);
+        result += `${refId}:\n${describeBlockTree(block)}`;
+      });
+      return result || 'Scratch pad: empty';
+    },
+    highlightBlock(ref: string) {
+      const ws = workspace.current;
+      if (!ws) return;
+      const blockId = [...blockRefsMap.current.entries()].find(([, v]) => v === ref)?.[0];
+      if (!blockId) return;
+      const block = ws.getBlockById(blockId);
+      if (!block) return;
+      ws.getAllBlocks().forEach(b => b.setHighlighted(false));
+      block.setHighlighted(true);
+      ws.centerOnBlock(blockId);
+    },
+    suggestCategory(category: string) {
+      const ws = workspace.current;
+      if (!ws) return;
+      const toolbox = ws.getToolbox();
+      if (toolbox) toolbox.selectCategoryByName(category);
+    },
+  }), [describeBlockTree]);
 
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -793,4 +846,4 @@ export function BlocklyPanel() {
       </div>
     </div>
   );
-}
+});

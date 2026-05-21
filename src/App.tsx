@@ -3,10 +3,19 @@ import type { JSX } from 'react';
 import { marked } from 'marked';
 import { useI18n } from './i18n';
 import { BlocklyPanel } from './BlocklyPanel';
+import type { BlocklyPanelHandle } from './BlocklyPanel';
+
+interface ToolCallDef {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
 
 interface Message {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_calls?: ToolCallDef[];
+  tool_call_id?: string;
 }
 
 interface Settings {
@@ -222,6 +231,7 @@ function App() {
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamingThinkingRef = useRef<HTMLPreElement>(null);
+  const blocklyRef = useRef<BlocklyPanelHandle>(null);
 
   useEffect(() => {
     void loadSessionsList();
@@ -287,11 +297,165 @@ function App() {
     }
   };
 
+  const SCRATCH_TOOLS = [
+    {
+      type: 'function',
+      function: {
+        name: 'get_scratch_context',
+        description: 'Get the current Scratch pad blocks and sprite state',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'highlight_block',
+        description: 'Highlight a specific block on the Scratch pad by its reference ID',
+        parameters: {
+          type: 'object',
+          properties: {
+            blockRef: { type: 'string', description: 'Block reference ID (e.g. #ref1, #ref2)' },
+          },
+          required: ['blockRef'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'suggest_block',
+        description: 'Open a Scratch block category to suggest blocks to the user',
+        parameters: {
+          type: 'object',
+          properties: {
+            category: { type: 'string', description: 'Category name: Motion, Looks, Control, Sensing, Logic, Text, Math' },
+          },
+          required: ['category'],
+        },
+      },
+    },
+  ];
+
+  const executeToolCall = async (tc: { id: string; function: { name: string; arguments: string } }): Promise<string> => {
+    const args = JSON.parse(tc.function.arguments);
+    switch (tc.function.name) {
+      case 'get_scratch_context':
+        return blocklyRef.current?.getContext() ?? 'Scratch pad: not available';
+      case 'highlight_block':
+        blocklyRef.current?.highlightBlock(args.blockRef);
+        return 'Block highlighted on Scratch pad';
+      case 'suggest_block':
+        blocklyRef.current?.suggestCategory(args.category);
+        return `Category "${args.category}" opened on Scratch pad`;
+      default:
+        return `Unknown tool: ${tc.function.name}`;
+    }
+  };
+
+  const streamResponse = async (
+    messages: Message[],
+    tools: unknown,
+  ): Promise<{
+    content: string;
+    thinking: string;
+    toolCalls: { id: string; function: { name: string; arguments: string } }[];
+    error?: string;
+  }> => {
+    const response = await fetch(settings.endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(settings.apiKey ? { 'Authorization': `Bearer ${settings.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model: settings.model,
+        messages,
+        stream: true,
+        ...(tools ? { tools } : {}),
+      }),
+    });
+
+    if (!response.ok) {
+      return { content: '', thinking: '', toolCalls: [], error: `API error: ${response.status}` };
+    }
+
+    if (!response.body) {
+      return { content: '', thinking: '', toolCalls: [], error: 'No response body' };
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let accumulatedContent = '';
+    let accumulatedThinking = '';
+    const toolCallAccum: Record<number, { id: string; function: { name: string; arguments: string } }> = {};
+
+    const readChunk = (): Promise<boolean> => {
+      return new Promise(resolve => {
+        reader.read().then(({ done, value }) => {
+          if (done) { resolve(true); return; }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data: ')) continue;
+            const data = trimmed.slice(6);
+            if (data === '[DONE]') continue;
+
+            try {
+              const parsed = JSON.parse(data);
+              const choice = parsed.choices?.[0];
+              if (!choice) continue;
+
+              const reasoning = choice.delta?.reasoning_content ?? '';
+              if (reasoning) {
+                accumulatedThinking += reasoning;
+                setStreamingThinking(accumulatedThinking);
+              }
+
+              const content = choice.delta?.content ?? '';
+              if (content) {
+                accumulatedContent += content;
+                setStreamingContent(accumulatedContent);
+              }
+
+              const tcs = choice.delta?.tool_calls;
+              if (tcs) {
+                for (const tc of tcs) {
+                  const idx = tc.index;
+                  if (!toolCallAccum[idx]) {
+                    toolCallAccum[idx] = { id: '', function: { name: '', arguments: '' } };
+                  }
+                  if (tc.id) toolCallAccum[idx].id = tc.id;
+                  if (tc.function?.name) toolCallAccum[idx].function.name += tc.function.name;
+                  if (tc.function?.arguments) toolCallAccum[idx].function.arguments += tc.function.arguments;
+                }
+              }
+            } catch {
+              // Skip invalid JSON
+            }
+          }
+
+          resolve(false);
+        });
+      });
+    };
+
+    while (true) {
+      const done = await readChunk();
+      if (done) break;
+    }
+
+    const toolCalls = Object.values(toolCallAccum).filter(tc => tc.id);
+    return { content: accumulatedContent, thinking: accumulatedThinking, toolCalls };
+  };
+
   const handleSend = async (): Promise<void> => {
     const trimmedInput = input.trim();
-    if (trimmedInput === '' || isLoading) {
-      return;
-    }
+    if (trimmedInput === '' || isLoading) return;
 
     if (currentSessionId === null) {
       await startNewSession();
@@ -299,88 +463,68 @@ function App() {
 
     setInput('');
     setIsLoading(true);
-    setStreamingContent('');
-    setStreamingThinking('');
 
     const userMessage: Message = { role: 'user', content: trimmedInput };
     const systemMessage: Message = { role: 'system', content: settings.systemPrompt };
     const existingMessagesWithoutSystem = messages.filter(m => m.role !== 'system');
-    const newMessages: Message[] = [systemMessage, ...existingMessagesWithoutSystem, userMessage];
-    setMessages(newMessages);
+    const tools = splitMode ? SCRATCH_TOOLS : undefined;
 
-    try {
-      const response = await fetch(settings.endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(settings.apiKey ? { 'Authorization': `Bearer ${settings.apiKey}` } : {}),
-        },
-        body: JSON.stringify({
-          model: settings.model,
-          messages: newMessages,
-          stream: true,
-        }),
-      });
+    let currentMessages: Message[] = [systemMessage, ...existingMessagesWithoutSystem, userMessage];
+    setMessages(currentMessages);
 
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+    let finalContent = '';
+    let finalThinking = '';
+    let error: string | undefined;
+    let retries = 0;
+
+    while (retries < 5) {
+      retries++;
+      setStreamingContent('');
+      setStreamingThinking('');
+
+      const result = await streamResponse(currentMessages, tools);
+
+      if (result.error) {
+        error = result.error;
+        break;
       }
 
-      if (!response.body) {
-        throw new Error('No response body');
-      }
+      if (result.toolCalls.length > 0) {
+        const assistantMsg: Message = {
+          role: 'assistant',
+          content: null,
+          tool_calls: result.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.function.name, arguments: tc.function.arguments },
+          })),
+        };
+        currentMessages = [...currentMessages, assistantMsg];
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let accumulatedContent = '';
-      let accumulatedThinking = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data: ')) continue;
-          const data = trimmed.slice(6);
-          if (data === '[DONE]') continue;
-
-          try {
-            const parsed = JSON.parse(data);
-            const reasoning = parsed.choices?.[0]?.delta?.reasoning_content ?? '';
-            const content = parsed.choices?.[0]?.delta?.content ?? '';
-            
-            if (reasoning) {
-              accumulatedThinking += reasoning;
-              setStreamingThinking(accumulatedThinking);
-            }
-            if (content) {
-              accumulatedContent += content;
-              setStreamingContent(accumulatedContent);
-            }
-          } catch {
-            // Skip invalid JSON
-          }
+        for (const tc of result.toolCalls) {
+          const toolResult = await executeToolCall(tc);
+          currentMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolResult });
         }
+        continue;
       }
 
-      const finalContent = accumulatedContent + (accumulatedThinking ? `\n<think>\n${accumulatedThinking}\n</think>` : '');
-      const assistantMessage: Message = { role: 'assistant', content: finalContent };
-      const allMessages = [...newMessages, assistantMessage];
+      finalContent = result.content;
+      finalThinking = result.thinking;
+      break;
+    }
+
+    if (error) {
+      setMessages([...currentMessages, { role: 'assistant', content: `${t('Error')}: ${error}` }]);
+    } else {
+      const finalAssistantContent = finalContent + (finalThinking ? `\n<think>\n${finalThinking}\n</think>` : '');
+      const assistantMessage: Message = { role: 'assistant', content: finalAssistantContent };
+      const allMessages = [...currentMessages, assistantMessage];
       setMessages(allMessages);
 
       if (currentSessionId !== null) {
         await updateSession(currentSessionId, allMessages);
         void loadSessionsList();
       }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : t('Unknown error');
-      setMessages([...newMessages, { role: 'assistant', content: `${t('Error')}: ${errorMessage}` }]);
     }
 
     setIsLoading(false);
@@ -594,7 +738,7 @@ function App() {
 
       {splitMode ? (
         <div className="scratch-full">
-          <BlocklyPanel />
+          <BlocklyPanel ref={blocklyRef} />
           <div className={`floating-chat ${chatMinimized ? 'minimized' : ''}`}>
             <div className="floating-chat-header" onClick={() => setChatMinimized(!chatMinimized)}>
               <span>{t('Chats')}</span>
