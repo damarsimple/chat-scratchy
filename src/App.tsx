@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
 import type { JSX } from 'react';
 import { marked } from 'marked';
 import { useI18n } from './i18n';
+import { BlocklyPanel } from './BlocklyPanel';
 
 interface Message {
   role: 'system' | 'user' | 'assistant';
@@ -592,7 +593,9 @@ function App() {
 
       {splitMode ? (
         <div className="main-content">
-          <div className="scratch-panel" />
+          <div className="scratch-panel">
+            <BlocklyPanel />
+          </div>
           <div className="chat-panel">{chatUI}</div>
         </div>
       ) : chatUI}

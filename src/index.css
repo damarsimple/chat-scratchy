@@ -112,8 +112,168 @@ body {
 
 .scratch-panel {
   flex: 7;
-  background: var(--bg-primary);
+  background: #F5F0E8;
   border-right: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.scratch-panel-inner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.scratch-body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+}
+
+.blockly-workspace {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.scratch-stage-area {
+  width: 320px;
+  flex-shrink: 0;
+  background: #E8F5E9;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px;
+}
+
+.scratch-stage-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #689F63;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+  align-self: flex-start;
+}
+
+.scratch-canvas {
+  border: 2px solid #A5D6A7;
+  border-radius: 4px;
+  background: #E8F5E9;
+  cursor: crosshair;
+}
+
+.scratch-sprite-info {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: #558B2F;
+  margin-top: 6px;
+  padding: 4px 2px;
+}
+
+.scratch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: #E8DDD0;
+  border-bottom: 2px solid #D4C9BC;
+}
+
+.scratch-coords {
+  font-size: 12px;
+  font-weight: 600;
+  color: #5D4037;
+  margin-left: auto;
+  font-family: 'Courier New', monospace;
+}
+
+.scratch-flag-btn,
+.scratch-stop-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.scratch-flag-btn {
+  background: #4CAF50;
+  color: white;
+  box-shadow: 0 2px 4px rgba(76, 175, 80, 0.3);
+}
+
+.scratch-flag-btn:hover:not(:disabled) {
+  transform: scale(1.12);
+  box-shadow: 0 3px 8px rgba(76, 175, 80, 0.4);
+}
+
+.scratch-flag-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scratch-stop-btn {
+  background: #F44336;
+  color: white;
+  box-shadow: 0 2px 4px rgba(244, 67, 54, 0.3);
+}
+
+.scratch-stop-btn:hover:not(:disabled) {
+  transform: scale(1.12);
+  box-shadow: 0 3px 8px rgba(244, 67, 54, 0.4);
+}
+
+.scratch-stop-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.scratch-flag-btn svg,
+.scratch-stop-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.scratch-output {
+  height: 60px;
+  background: #FFF8E1;
+  border-top: 2px solid #FFE082;
+  padding: 6px 14px;
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.scratch-bubble {
+  background: white;
+  border: 2px solid #FFD54F;
+  border-radius: 16px;
+  padding: 3px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #F57F17;
+  white-space: nowrap;
+  animation: popIn 0.25s ease-out;
+  flex-shrink: 0;
+}
+
+@keyframes popIn {
+  0% { transform: scale(0.5); opacity: 0; }
+  70% { transform: scale(1.1); }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 .chat-panel {
