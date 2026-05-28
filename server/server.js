@@ -29,11 +29,11 @@ function saveSessions(sessions) {
 let sessions = loadSessions();
 
 app.get('/api/sessions', (_req, res) => {
-  const list = Object.entries(sessions).map(([id, data]) => ({
-    id,
-    title: data.messages[0]?.content?.slice(0, 50) || 'New Chat',
-    updatedAt: data.updatedAt,
-  }));
+  const list = Object.entries(sessions).map(([id, data]) => {
+    const firstUserMsg = data.messages.find(m => m.role === 'user');
+    const title = firstUserMsg?.content?.slice(0, 50) || 'New Chat';
+    return { id, title, updatedAt: data.updatedAt };
+  });
   list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   res.json(list);
 });

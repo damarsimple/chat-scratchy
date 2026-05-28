@@ -1,16 +1,91 @@
-import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
+import {
+  useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle,
+} from 'react';
 import * as Blockly from 'blockly';
 import 'blockly/blocks';
-import { javascriptGenerator } from 'blockly/javascript';
+import { javascriptGenerator, Order } from 'blockly/javascript';
+import { extractAllBlocks } from './scratchPatterns';
+import type { BlockData } from './scratchPatterns';
+import { EXAMPLE_CHAINS } from './exampleChains';
 
-export interface BlocklyPanelHandle {
-  getContext(): string;
-  highlightBlock(ref: string): void;
-  suggestCategory(category: string): void;
-  getOutputLogs(): string[];
+// ── Global Window API declarations ─────────────────────────────────
+
+declare global {
+  interface Window {
+    __scratchAnswer: string;
+    __scratchPos: () => SpriteState;
+    __scratchMousePos: () => { x: number; y: number };
+    __scratchKeyPressed: (key: string) => boolean;
+    __scratchMove: (steps: number) => Promise<void>;
+    __scratchTurn: (deg: number) => Promise<void>;
+    __scratchGoTo: (x: number, y: number) => Promise<void>;
+    __scratchChangeX: (dx: number) => Promise<void>;
+    __scratchSetX: (x: number) => Promise<void>;
+    __scratchChangeY: (dy: number) => Promise<void>;
+    __scratchSetY: (y: number) => Promise<void>;
+    __scratchBounce: () => Promise<void>;
+    __scratchGlide: (secs: number, tx: number, ty: number) => Promise<void>;
+    __scratchSay: (text: string) => void;
+    __scratchSaySeconds: (text: string, secs: number) => Promise<void>;
+    __scratchShow: () => Promise<void>;
+    __scratchHide: () => Promise<void>;
+    __scratchChangeSize: (delta: number) => Promise<void>;
+    __scratchSetSize: (size: number) => Promise<void>;
+    __scratchWait: (seconds: number) => Promise<void>;
+    __scratchAsk: (question: string) => void;
+    __scratchPlaySound: (name: string) => void;
+    __scratchSwitchCostume: (num: number) => void;
+    __scratchNextCostume: () => void;
+    __scratchCostumeNumber: () => number;
+    __scratchBroadcast: (msg: string) => Promise<void>;
+    __scratchCreateClone: () => void;
+    __scratchDeleteClone: () => void;
+    __scratchTouchingMouse: () => boolean;
+    __scratchTouchingEdge: () => boolean;
+    __scratchDistToMouse: () => number;
+  }
 }
 
-// ── Sprite state ───────────────────────────────────────────────────
+// ── Handle interface ────────────────────────────────────────────────
+
+export interface BlocklyPanelHandle {
+  // Observation
+  getContext(): string;
+  getBlockSnapshot(): BlockData[];
+  getGeneratedCode(): string;
+  getOutputLogs(): string[];
+
+  // Pointing
+  highlightBlock(ref: string): void;
+  zoomToBlock(ref: string): void;
+  zoomToFit(): void;
+
+  // Annotation
+  showBlockTip(blockRef: string, message: string): void;
+  clearBlockTips(): void;
+
+  // Building
+  suggestCategory(category: string): void;
+  highlightToolboxBlock(category: string, blockType: string): void;
+  insertBlock(type: string): string;       // returns refId
+  deleteBlock(blockRef: string): void;
+  setBlockField(blockRef: string, fieldName: string, value: string): void;
+  connectBelow(topRef: string, bottomRef: string): void;
+  wrapInLoop(blockRef: string, loopType: string): void;
+
+  // Examples & control
+  addExampleChain(conceptName: string): void;
+  runProgram(): void;
+}
+
+// ── Block tip type ──────────────────────────────────────────────────
+
+interface BlockTip {
+  blockId: string;
+  message: string;
+}
+
+// ── Sprite state ────────────────────────────────────────────────────
 
 interface SpriteState {
   x: number;
@@ -24,361 +99,160 @@ function defaultSprite(): SpriteState {
   return { x: 0, y: 0, direction: 90, size: 100, visible: true };
 }
 
-// ── Custom blocks ──────────────────────────────────────────────────
+// ── Helper: resolve refId → blockId ────────────────────────────────
+
+function resolveRef(refId: string, map: Map<string, string>): string | undefined {
+  return [...map.entries()].find(([, v]) => v === refId)?.[0];
+}
+
+// ── Custom block definitions ────────────────────────────────────────
 
 function defineBlock(type: string, def: Record<string, unknown>) {
   Blockly.Blocks[type] = { init() { this.jsonInit(def); } };
 }
 
-defineBlock('scratch_movesteps', {
-  message0: 'move %1 steps',
-  args0: [{ type: 'input_value', name: 'STEPS', check: 'Number' }],
-  previousStatement: null, nextStatement: null, colour: 120,
-});
+defineBlock('scratch_movesteps', { message0: 'move %1 steps', args0: [{ type: 'input_value', name: 'STEPS', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_turnright', { message0: 'turn right %1 degrees', args0: [{ type: 'input_value', name: 'DEGREES', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_turnleft', { message0: 'turn left %1 degrees', args0: [{ type: 'input_value', name: 'DEGREES', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_goto', { message0: 'go to x: %1 y: %2', args0: [{ type: 'input_value', name: 'X', check: 'Number' }, { type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_glide', { message0: 'glide %1 secs to x: %2 y: %3', args0: [{ type: 'input_value', name: 'SECS', check: 'Number' }, { type: 'input_value', name: 'X', check: 'Number' }, { type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_changex', { message0: 'change x by %1', args0: [{ type: 'input_value', name: 'DX', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_setx', { message0: 'set x to %1', args0: [{ type: 'input_value', name: 'X', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_changey', { message0: 'change y by %1', args0: [{ type: 'input_value', name: 'DY', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_sety', { message0: 'set y to %1', args0: [{ type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_ifonedgebounce', { message0: 'if on edge, bounce', previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_xposition', { message0: 'x position', output: 'Number', colour: 120 });
+defineBlock('scratch_yposition', { message0: 'y position', output: 'Number', colour: 120 });
+defineBlock('scratch_direction', { message0: 'direction', output: 'Number', colour: 120 });
+defineBlock('scratch_says', { message0: 'say %1', args0: [{ type: 'input_value', name: 'TEXT' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_sayseconds', { message0: 'say %1 for %2 seconds', args0: [{ type: 'input_value', name: 'TEXT' }, { type: 'input_value', name: 'SECS', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_show', { message0: 'show', previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_hide', { message0: 'hide', previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_changesize', { message0: 'change size by %1', args0: [{ type: 'input_value', name: 'DELTA', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_setsize', { message0: 'set size to %1 %', args0: [{ type: 'input_value', name: 'SIZE', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_size', { message0: 'size', output: 'Number', colour: 200 });
+defineBlock('scratch_touchingmouse', { message0: 'touching mouse-pointer?', output: 'Boolean', colour: 60 });
+defineBlock('scratch_touchingedge', { message0: 'touching edge?', output: 'Boolean', colour: 60 });
+defineBlock('scratch_distancetomouse', { message0: 'distance to mouse-pointer', output: 'Number', colour: 60 });
+defineBlock('scratch_mousex', { message0: 'mouse x', output: 'Number', colour: 60 });
+defineBlock('scratch_mousey', { message0: 'mouse y', output: 'Number', colour: 60 });
+defineBlock('scratch_keypressed', { message0: 'key %1 pressed?', args0: [{ type: 'field_dropdown', name: 'KEY', options: [['space', 'space'], ['up arrow', 'ArrowUp'], ['down arrow', 'ArrowDown'], ['left arrow', 'ArrowLeft'], ['right arrow', 'ArrowRight'], ['a', 'a'], ['b', 'b']] }], output: 'Boolean', colour: 60 });
+defineBlock('event_whenflagclicked', { message0: 'when flag clicked', nextStatement: null, colour: 330 });
+defineBlock('event_whenkeypressed', { message0: 'when %1 key pressed', args0: [{ type: 'field_dropdown', name: 'KEY', options: [['space', 'space'], ['up arrow', 'ArrowUp'], ['down arrow', 'ArrowDown'], ['left arrow', 'ArrowLeft'], ['right arrow', 'ArrowRight'], ['a', 'a'], ['b', 'b'], ['any', 'any']] }], nextStatement: null, colour: 330 });
+defineBlock('event_whenthisspriteclicked', { message0: 'when this sprite clicked', nextStatement: null, colour: 330 });
+defineBlock('scratch_broadcast', { message0: 'broadcast %1', args0: [{ type: 'input_value', name: 'MESSAGE', check: 'String' }], previousStatement: null, nextStatement: null, colour: 330 });
+defineBlock('scratch_whenireceive', { message0: 'when I receive %1', args0: [{ type: 'input_value', name: 'MESSAGE', check: 'String' }], nextStatement: null, colour: 330 });
+defineBlock('scratch_playsound', { message0: 'play sound %1', args0: [{ type: 'input_value', name: 'SOUND', check: 'String' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_switchcostume', { message0: 'switch costume to %1', args0: [{ type: 'input_value', name: 'COSTUME', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_nextcostume', { message0: 'next costume', previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_costumenumber', { message0: 'costume #', output: 'Number', colour: 200 });
+defineBlock('scratch_askandwait', { message0: 'ask %1 and wait', args0: [{ type: 'input_value', name: 'QUESTION', check: 'String' }], previousStatement: null, nextStatement: null, colour: 60 });
+defineBlock('scratch_answer', { message0: 'answer', output: 'String', colour: 60 });
+defineBlock('scratch_createclone', { message0: 'create clone of myself', previousStatement: null, nextStatement: null, colour: 330 });
+defineBlock('scratch_whenclonestart', { message0: 'when I start as a clone', nextStatement: null, colour: 330 });
+defineBlock('scratch_deleteclone', { message0: 'delete this clone', previousStatement: null, nextStatement: null, colour: 330 });
 
-defineBlock('scratch_turnright', {
-  message0: 'turn right %1 degrees',
-  args0: [{ type: 'input_value', name: 'DEGREES', check: 'Number' }],
-  previousStatement: null, nextStatement: null, colour: 120,
-});
-
-defineBlock('scratch_turnleft', {
-  message0: 'turn left %1 degrees',
-  args0: [{ type: 'input_value', name: 'DEGREES', check: 'Number' }],
-  previousStatement: null, nextStatement: null, colour: 120,
-});
-
-defineBlock('scratch_goto', {
-  message0: 'go to x: %1 y: %2',
-  args0: [
-    { type: 'input_value', name: 'X', check: 'Number' },
-    { type: 'input_value', name: 'Y', check: 'Number' },
-  ],
-  previousStatement: null, nextStatement: null, colour: 120,
-});
-
-defineBlock('scratch_glide', {
-  message0: 'glide %1 secs to x: %2 y: %3',
-  args0: [
-    { type: 'input_value', name: 'SECS', check: 'Number' },
-    { type: 'input_value', name: 'X', check: 'Number' },
-    { type: 'input_value', name: 'Y', check: 'Number' },
-  ],
-  previousStatement: null, nextStatement: null, colour: 120,
-});
-
-defineBlock('scratch_changex', {
-  message0: 'change x by %1',
-  args0: [{ type: 'input_value', name: 'DX', check: 'Number' }],
-  previousStatement: null, nextStatement: null, colour: 120,
-});
-
-defineBlock('scratch_setx', {
-  message0: 'set x to %1',
-  args0: [{ type: 'input_value', name: 'X', check: 'Number' }],
-  previousStatement: null, nextStatement: null, colour: 120,
-});
-
-defineBlock('scratch_changey', {
-  message0: 'change y by %1',
-  args0: [{ type: 'input_value', name: 'DY', check: 'Number' }],
-  previousStatement: null, nextStatement: null, colour: 120,
-});
-
-defineBlock('scratch_sety', {
-  message0: 'set y to %1',
-  args0: [{ type: 'input_value', name: 'Y', check: 'Number' }],
-  previousStatement: null, nextStatement: null, colour: 120,
-});
-
-defineBlock('scratch_ifonedgebounce', {
-  message0: 'if on edge, bounce',
-  previousStatement: null, nextStatement: null, colour: 120,
-});
-
-defineBlock('scratch_xposition', {
-  message0: 'x position',
-  output: 'Number', colour: 120,
-});
-
-defineBlock('scratch_yposition', {
-  message0: 'y position',
-  output: 'Number', colour: 120,
-});
-
-defineBlock('scratch_direction', {
-  message0: 'direction',
-  output: 'Number', colour: 120,
-});
-
-defineBlock('scratch_says', {
-  message0: 'say %1',
-  args0: [{ type: 'input_value', name: 'TEXT' }],
-  previousStatement: null, nextStatement: null, colour: 200,
-});
-
-defineBlock('scratch_sayseconds', {
-  message0: 'say %1 for %2 seconds',
-  args0: [
-    { type: 'input_value', name: 'TEXT' },
-    { type: 'input_value', name: 'SECS', check: 'Number' },
-  ],
-  previousStatement: null, nextStatement: null, colour: 200,
-});
-
-defineBlock('scratch_show', {
-  message0: 'show',
-  previousStatement: null, nextStatement: null, colour: 200,
-});
-
-defineBlock('scratch_hide', {
-  message0: 'hide',
-  previousStatement: null, nextStatement: null, colour: 200,
-});
-
-defineBlock('scratch_changesize', {
-  message0: 'change size by %1',
-  args0: [{ type: 'input_value', name: 'DELTA', check: 'Number' }],
-  previousStatement: null, nextStatement: null, colour: 200,
-});
-
-defineBlock('scratch_setsize', {
-  message0: 'set size to %1 %',
-  args0: [{ type: 'input_value', name: 'SIZE', check: 'Number' }],
-  previousStatement: null, nextStatement: null, colour: 200,
-});
-
-defineBlock('scratch_size', {
-  message0: 'size',
-  output: 'Number', colour: 200,
-});
-
-defineBlock('scratch_touchingmouse', {
-  message0: 'touching mouse-pointer?',
-  output: 'Boolean', colour: 60,
-});
-
-defineBlock('scratch_touchingedge', {
-  message0: 'touching edge?',
-  output: 'Boolean', colour: 60,
-});
-
-defineBlock('scratch_distancetomouse', {
-  message0: 'distance to mouse-pointer',
-  output: 'Number', colour: 60,
-});
-
-defineBlock('scratch_mousex', {
-  message0: 'mouse x',
-  output: 'Number', colour: 60,
-});
-
-defineBlock('scratch_mousey', {
-  message0: 'mouse y',
-  output: 'Number', colour: 60,
-});
-
-defineBlock('scratch_keypressed', {
-  message0: 'key %1 pressed?',
-  args0: [
-    {
-      type: 'field_dropdown',
-      name: 'KEY',
-      options: [
-        ['space', 'space'],
-        ['up arrow', 'ArrowUp'],
-        ['down arrow', 'ArrowDown'],
-        ['left arrow', 'ArrowLeft'],
-        ['right arrow', 'ArrowRight'],
-        ['a', 'a'],
-        ['b', 'b'],
-      ],
-    },
-  ],
-  output: 'Boolean', colour: 60,
-});
-
-// ── JavaScript generators ──────────────────────────────────────────
-
-javascriptGenerator.forBlock['scratch_movesteps'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'STEPS', javascriptGenerator.Order.NONE) || '0';
-  return `await window.__scratchMove(${v});\n`;
-};
-javascriptGenerator.forBlock['scratch_turnright'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'DEGREES', javascriptGenerator.Order.NONE) || '0';
-  return `await window.__scratchTurn(${v});\n`;
-};
-javascriptGenerator.forBlock['scratch_turnleft'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'DEGREES', javascriptGenerator.Order.NONE) || '0';
-  return `await window.__scratchTurn(-${v});\n`;
-};
-javascriptGenerator.forBlock['scratch_goto'] = function (b) {
-  const x = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.Order.NONE) || '0';
-  const y = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.Order.NONE) || '0';
-  return `await window.__scratchGoTo(${x}, ${y});\n`;
-};
-javascriptGenerator.forBlock['scratch_glide'] = function (b) {
-  const s = javascriptGenerator.valueToCode(b, 'SECS', javascriptGenerator.Order.NONE) || '1';
-  const x = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.Order.NONE) || '0';
-  const y = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.Order.NONE) || '0';
-  return `await window.__scratchGlide(${s}, ${x}, ${y});\n`;
-};
-javascriptGenerator.forBlock['scratch_changex'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'DX', javascriptGenerator.Order.NONE) || '0';
-  return `await window.__scratchChangeX(${v});\n`;
-};
-javascriptGenerator.forBlock['scratch_setx'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'X', javascriptGenerator.Order.NONE) || '0';
-  return `await window.__scratchSetX(${v});\n`;
-};
-javascriptGenerator.forBlock['scratch_changey'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'DY', javascriptGenerator.Order.NONE) || '0';
-  return `await window.__scratchChangeY(${v});\n`;
-};
-javascriptGenerator.forBlock['scratch_sety'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'Y', javascriptGenerator.Order.NONE) || '0';
-  return `await window.__scratchSetY(${v});\n`;
-};
-javascriptGenerator.forBlock['scratch_ifonedgebounce'] = function () {
-  return 'await window.__scratchBounce();\n';
-};
-javascriptGenerator.forBlock['scratch_xposition'] = function () {
-  return ['window.__scratchPos().x', javascriptGenerator.Order.MEMBER];
-};
-javascriptGenerator.forBlock['scratch_yposition'] = function () {
-  return ['window.__scratchPos().y', javascriptGenerator.Order.MEMBER];
-};
-javascriptGenerator.forBlock['scratch_direction'] = function () {
-  return ['window.__scratchPos().direction', javascriptGenerator.Order.MEMBER];
-};
-javascriptGenerator.forBlock['scratch_says'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'TEXT', javascriptGenerator.Order.NONE);
-  return `window.__scratchSay(${v});\n`;
-};
-javascriptGenerator.forBlock['scratch_sayseconds'] = function (b) {
-  const t = javascriptGenerator.valueToCode(b, 'TEXT', javascriptGenerator.Order.NONE);
-  const s = javascriptGenerator.valueToCode(b, 'SECS', javascriptGenerator.Order.NONE) || '2';
-  return `await window.__scratchSaySeconds(${t}, ${s});\n`;
-};
-javascriptGenerator.forBlock['scratch_show'] = function () {
-  return 'await window.__scratchShow();\n';
-};
-javascriptGenerator.forBlock['scratch_hide'] = function () {
-  return 'await window.__scratchHide();\n';
-};
-javascriptGenerator.forBlock['scratch_changesize'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'DELTA', javascriptGenerator.Order.NONE) || '0';
-  return `await window.__scratchChangeSize(${v});\n`;
-};
-javascriptGenerator.forBlock['scratch_setsize'] = function (b) {
-  const v = javascriptGenerator.valueToCode(b, 'SIZE', javascriptGenerator.Order.NONE) || '100';
-  return `await window.__scratchSetSize(${v});\n`;
-};
-javascriptGenerator.forBlock['scratch_size'] = function () {
-  return ['window.__scratchPos().size', javascriptGenerator.Order.MEMBER];
-};
-javascriptGenerator.forBlock['scratch_touchingmouse'] = function () {
-  return ['window.__scratchTouchingMouse()', javascriptGenerator.Order.MEMBER];
-};
-javascriptGenerator.forBlock['scratch_touchingedge'] = function () {
-  return ['window.__scratchTouchingEdge()', javascriptGenerator.Order.MEMBER];
-};
-javascriptGenerator.forBlock['scratch_distancetomouse'] = function () {
-  return ['window.__scratchDistToMouse()', javascriptGenerator.Order.MEMBER];
-};
-javascriptGenerator.forBlock['scratch_mousex'] = function () {
-  return ['window.__scratchMousePos().x', javascriptGenerator.Order.MEMBER];
-};
-javascriptGenerator.forBlock['scratch_mousey'] = function () {
-  return ['window.__scratchMousePos().y', javascriptGenerator.Order.MEMBER];
-};
-javascriptGenerator.forBlock['scratch_keypressed'] = function (b) {
-  const key = b.getFieldValue('KEY');
-  return [`window.__scratchKeyPressed('${key}')`, javascriptGenerator.Order.MEMBER];
+Blockly.Blocks['scratch_wait'] = {
+  init() {
+    this.jsonInit({ message0: 'wait %1 seconds', args0: [{ type: 'input_value', name: 'SECONDS', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 330 });
+  },
 };
 
-// ── Toolbox ────────────────────────────────────────────────────────
+// ── JS generators ───────────────────────────────────────────────────
+
+javascriptGenerator.forBlock['scratch_movesteps'] = b => `await window.__scratchMove(${javascriptGenerator.valueToCode(b, 'STEPS', Order.NONE) || '0'});\n`;
+javascriptGenerator.forBlock['scratch_turnright'] = b => `await window.__scratchTurn(${javascriptGenerator.valueToCode(b, 'DEGREES', Order.NONE) || '0'});\n`;
+javascriptGenerator.forBlock['scratch_turnleft'] = b => `await window.__scratchTurn(-${javascriptGenerator.valueToCode(b, 'DEGREES', Order.NONE) || '0'});\n`;
+javascriptGenerator.forBlock['scratch_goto'] = b => `await window.__scratchGoTo(${javascriptGenerator.valueToCode(b, 'X', Order.NONE) || '0'}, ${javascriptGenerator.valueToCode(b, 'Y', Order.NONE) || '0'});\n`;
+javascriptGenerator.forBlock['scratch_glide'] = b => `await window.__scratchGlide(${javascriptGenerator.valueToCode(b, 'SECS', Order.NONE) || '1'}, ${javascriptGenerator.valueToCode(b, 'X', Order.NONE) || '0'}, ${javascriptGenerator.valueToCode(b, 'Y', Order.NONE) || '0'});\n`;
+javascriptGenerator.forBlock['scratch_changex'] = b => `await window.__scratchChangeX(${javascriptGenerator.valueToCode(b, 'DX', Order.NONE) || '0'});\n`;
+javascriptGenerator.forBlock['scratch_setx'] = b => `await window.__scratchSetX(${javascriptGenerator.valueToCode(b, 'X', Order.NONE) || '0'});\n`;
+javascriptGenerator.forBlock['scratch_changey'] = b => `await window.__scratchChangeY(${javascriptGenerator.valueToCode(b, 'DY', Order.NONE) || '0'});\n`;
+javascriptGenerator.forBlock['scratch_sety'] = b => `await window.__scratchSetY(${javascriptGenerator.valueToCode(b, 'Y', Order.NONE) || '0'});\n`;
+javascriptGenerator.forBlock['scratch_ifonedgebounce'] = () => 'await window.__scratchBounce();\n';
+javascriptGenerator.forBlock['scratch_xposition'] = () => ['window.__scratchPos().x', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_yposition'] = () => ['window.__scratchPos().y', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_direction'] = () => ['window.__scratchPos().direction', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_says'] = b => `window.__scratchSay(${javascriptGenerator.valueToCode(b, 'TEXT', Order.NONE)});\n`;
+javascriptGenerator.forBlock['scratch_sayseconds'] = b => `await window.__scratchSaySeconds(${javascriptGenerator.valueToCode(b, 'TEXT', Order.NONE)}, ${javascriptGenerator.valueToCode(b, 'SECS', Order.NONE) || '2'});\n`;
+javascriptGenerator.forBlock['scratch_show'] = () => 'await window.__scratchShow();\n';
+javascriptGenerator.forBlock['scratch_hide'] = () => 'await window.__scratchHide();\n';
+javascriptGenerator.forBlock['scratch_changesize'] = b => `await window.__scratchChangeSize(${javascriptGenerator.valueToCode(b, 'DELTA', Order.NONE) || '0'});\n`;
+javascriptGenerator.forBlock['scratch_setsize'] = b => `await window.__scratchSetSize(${javascriptGenerator.valueToCode(b, 'SIZE', Order.NONE) || '100'});\n`;
+javascriptGenerator.forBlock['scratch_size'] = () => ['window.__scratchPos().size', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_touchingmouse'] = () => ['window.__scratchTouchingMouse()', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_touchingedge'] = () => ['window.__scratchTouchingEdge()', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_distancetomouse'] = () => ['window.__scratchDistToMouse()', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_mousex'] = () => ['window.__scratchMousePos().x', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_mousey'] = () => ['window.__scratchMousePos().y', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_keypressed'] = b => [`window.__scratchKeyPressed('${b.getFieldValue('KEY')}')`, Order.MEMBER];
+javascriptGenerator.forBlock['scratch_wait'] = b => `await window.__scratchWait(${javascriptGenerator.valueToCode(b, 'SECONDS', Order.NONE) || '1'});\n`;
+javascriptGenerator.forBlock['scratch_playsound'] = b => `window.__scratchPlaySound(${javascriptGenerator.valueToCode(b, 'SOUND', Order.NONE) || '""'});\n`;
+javascriptGenerator.forBlock['scratch_switchcostume'] = b => `window.__scratchSwitchCostume(${javascriptGenerator.valueToCode(b, 'COSTUME', Order.NONE) || '1'});\n`;
+javascriptGenerator.forBlock['scratch_nextcostume'] = () => 'window.__scratchNextCostume();\n';
+javascriptGenerator.forBlock['scratch_costumenumber'] = () => ['window.__scratchCostumeNumber()', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_askandwait'] = b => `window.__scratchAsk(${javascriptGenerator.valueToCode(b, 'QUESTION', Order.NONE) || '""'});\n`;
+javascriptGenerator.forBlock['scratch_answer'] = () => ['window.__scratchAnswer || ""', Order.MEMBER];
+javascriptGenerator.forBlock['scratch_createclone'] = () => 'window.__scratchCreateClone();\n';
+javascriptGenerator.forBlock['scratch_deleteclone'] = () => 'window.__scratchDeleteClone();\n';
+javascriptGenerator.forBlock['scratch_broadcast'] = b => `await window.__scratchBroadcast(${javascriptGenerator.valueToCode(b, 'MESSAGE', Order.NONE) || '""'});\n`;
+
+function generateChain(b: Blockly.Block): string {
+  const next = b.nextConnection?.targetBlock();
+  if (!next) return '';
+  const code = javascriptGenerator.blockToCode(next);
+  return (typeof code === 'string' ? code : code[0]) || '';
+}
+javascriptGenerator.forBlock['event_whenflagclicked'] = generateChain;
+javascriptGenerator.forBlock['event_whenkeypressed'] = generateChain;
+javascriptGenerator.forBlock['event_whenthisspriteclicked'] = generateChain;
+javascriptGenerator.forBlock['scratch_whenireceive'] = generateChain;
+javascriptGenerator.forBlock['scratch_whenclonestart'] = generateChain;
+
+// ── Toolbox ─────────────────────────────────────────────────────────
 
 const TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
   kind: 'categoryToolbox',
   contents: [
-    {
-      kind: 'category', name: 'Motion', colour: '#4C97FF',
-      contents: [
-        { kind: 'block', type: 'scratch_movesteps' },
-        { kind: 'block', type: 'scratch_turnright' },
-        { kind: 'block', type: 'scratch_turnleft' },
-        { kind: 'block', type: 'scratch_goto' },
-        { kind: 'block', type: 'scratch_glide' },
-        { kind: 'block', type: 'scratch_changex' },
-        { kind: 'block', type: 'scratch_setx' },
-        { kind: 'block', type: 'scratch_changey' },
-        { kind: 'block', type: 'scratch_sety' },
-        { kind: 'block', type: 'scratch_ifonedgebounce' },
-        { kind: 'block', type: 'scratch_xposition' },
-        { kind: 'block', type: 'scratch_yposition' },
-        { kind: 'block', type: 'scratch_direction' },
-      ],
-    },
-    {
-      kind: 'category', name: 'Looks', colour: '#9966FF',
-      contents: [
-        { kind: 'block', type: 'scratch_says' },
-        { kind: 'block', type: 'scratch_sayseconds' },
-        { kind: 'block', type: 'scratch_show' },
-        { kind: 'block', type: 'scratch_hide' },
-        { kind: 'block', type: 'scratch_changesize' },
-        { kind: 'block', type: 'scratch_setsize' },
-        { kind: 'block', type: 'scratch_size' },
-      ],
-    },
-    {
-      kind: 'category', name: 'Control', colour: '#EC4899',
-      contents: [
-        { kind: 'block', type: 'scratch_wait' },
-        { kind: 'block', type: 'controls_repeat_ext' },
-        { kind: 'block', type: 'controls_whileUntil' },
-      ],
-    },
-    {
-      kind: 'category', name: 'Sensing', colour: '#4CBFE6',
-      contents: [
-        { kind: 'block', type: 'scratch_touchingmouse' },
-        { kind: 'block', type: 'scratch_touchingedge' },
-        { kind: 'block', type: 'scratch_distancetomouse' },
-        { kind: 'block', type: 'scratch_mousex' },
-        { kind: 'block', type: 'scratch_mousey' },
-        { kind: 'block', type: 'scratch_keypressed' },
-      ],
-    },
-    {
-      kind: 'category', name: 'Logic', colour: '#F97316',
-      contents: [
-        { kind: 'block', type: 'logic_compare' },
-        { kind: 'block', type: 'logic_operation' },
-        { kind: 'block', type: 'logic_boolean' },
-      ],
-    },
-    {
-      kind: 'category', name: 'Text', colour: '#10B981',
-      contents: [
-        { kind: 'block', type: 'text' },
-        { kind: 'block', type: 'text_join' },
-        { kind: 'block', type: 'text_length' },
-      ],
-    },
-    {
-      kind: 'category', name: 'Math', colour: '#3B82F6',
-      contents: [
-        { kind: 'block', type: 'math_number' },
-        { kind: 'block', type: 'math_arithmetic' },
-        { kind: 'block', type: 'math_random_int' },
-      ],
-    },
+    { kind: 'category', name: 'Motion', colour: '#4C97FF', contents: [
+      { kind: 'block', type: 'scratch_movesteps' }, { kind: 'block', type: 'scratch_turnright' }, { kind: 'block', type: 'scratch_turnleft' },
+      { kind: 'block', type: 'scratch_goto' }, { kind: 'block', type: 'scratch_glide' }, { kind: 'block', type: 'scratch_changex' },
+      { kind: 'block', type: 'scratch_setx' }, { kind: 'block', type: 'scratch_changey' }, { kind: 'block', type: 'scratch_sety' },
+      { kind: 'block', type: 'scratch_ifonedgebounce' }, { kind: 'block', type: 'scratch_xposition' }, { kind: 'block', type: 'scratch_yposition' }, { kind: 'block', type: 'scratch_direction' },
+    ] },
+    { kind: 'category', name: 'Looks', colour: '#9966FF', contents: [
+      { kind: 'block', type: 'scratch_says' }, { kind: 'block', type: 'scratch_sayseconds' }, { kind: 'block', type: 'scratch_show' }, { kind: 'block', type: 'scratch_hide' },
+      { kind: 'block', type: 'scratch_changesize' }, { kind: 'block', type: 'scratch_setsize' }, { kind: 'block', type: 'scratch_size' },
+      { kind: 'block', type: 'scratch_switchcostume' }, { kind: 'block', type: 'scratch_nextcostume' }, { kind: 'block', type: 'scratch_costumenumber' },
+    ] },
+    { kind: 'category', name: 'Sound', colour: '#CF63CF', contents: [{ kind: 'block', type: 'scratch_playsound' }] },
+    { kind: 'category', name: 'Events', colour: '#FFAB00', contents: [
+      { kind: 'block', type: 'event_whenflagclicked' }, { kind: 'block', type: 'event_whenkeypressed' }, { kind: 'block', type: 'event_whenthisspriteclicked' },
+      { kind: 'block', type: 'scratch_broadcast' }, { kind: 'block', type: 'scratch_whenireceive' },
+    ] },
+    { kind: 'category', name: 'Control', colour: '#EC4899', contents: [
+      { kind: 'block', type: 'controls_if' },
+      { kind: 'block', type: 'controls_repeat_ext' }, { kind: 'block', type: 'controls_whileUntil' }, { kind: 'block', type: 'scratch_wait' },
+    ] },
+    { kind: 'category', name: 'Sensing', colour: '#4CBFE6', contents: [
+      { kind: 'block', type: 'scratch_touchingmouse' }, { kind: 'block', type: 'scratch_touchingedge' },
+      { kind: 'block', type: 'scratch_distancetomouse' }, { kind: 'block', type: 'scratch_mousex' }, { kind: 'block', type: 'scratch_mousey' },
+      { kind: 'block', type: 'scratch_keypressed' }, { kind: 'block', type: 'scratch_askandwait' }, { kind: 'block', type: 'scratch_answer' },
+    ] },
+    { kind: 'category', name: 'Logic', colour: '#F97316', contents: [
+      { kind: 'block', type: 'logic_compare' }, { kind: 'block', type: 'logic_operation' }, { kind: 'block', type: 'logic_boolean' },
+    ] },
+    { kind: 'category', name: 'Text', colour: '#10B981', contents: [
+      { kind: 'block', type: 'text' }, { kind: 'block', type: 'text_join' }, { kind: 'block', type: 'text_length' },
+    ] },
+    { kind: 'category', name: 'Math', colour: '#3B82F6', contents: [
+      { kind: 'block', type: 'math_number' }, { kind: 'block', type: 'math_arithmetic' }, { kind: 'block', type: 'math_random_int' },
+    ] },
+    { kind: 'category', name: 'Variables', colour: '#FF8C00', custom: 'VARIABLE' },
   ],
 };
 
-// ── Canvas helpers ─────────────────────────────────────────────────
+// ── Canvas helpers ──────────────────────────────────────────────────
 
 const SPRITE_SIZE = 28;
 const COORD_RANGE = 150;
@@ -386,121 +260,104 @@ const COORD_RANGE = 150;
 function scratchToCanvas(sx: number, sy: number): [number, number] {
   return [sx + COORD_RANGE, COORD_RANGE - sy];
 }
-
 function canvasToScratch(px: number, py: number): [number, number] {
   return [px - COORD_RANGE, COORD_RANGE - py];
 }
 
 function drawSprite(ctx: CanvasRenderingContext2D, s: SpriteState) {
-  const w = ctx.canvas.width;
-  const h = ctx.canvas.height;
-
-  // Background grid
-  ctx.fillStyle = '#E8F5E9';
-  ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = '#C8E6C9';
-  ctx.lineWidth = 0.5;
+  const w = ctx.canvas.width, h = ctx.canvas.height;
+  ctx.fillStyle = '#E8F5E9'; ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#C8E6C9'; ctx.lineWidth = 0.5;
   for (let i = -COORD_RANGE; i <= COORD_RANGE; i += 30) {
-    const [px] = scratchToCanvas(i, 0);
-    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+    const [px] = scratchToCanvas(i, 0); ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
   }
   for (let i = -COORD_RANGE; i <= COORD_RANGE; i += 30) {
-    const [, py] = scratchToCanvas(0, i);
-    ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(w, py); ctx.stroke();
+    const [, py] = scratchToCanvas(0, i); ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(w, py); ctx.stroke();
   }
-
-  // Axes
   const [cx, cy] = scratchToCanvas(0, 0);
-  ctx.strokeStyle = '#999';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#999'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
-
   if (!s.visible) return;
-
   const [px, py] = scratchToCanvas(s.x, s.y);
   const scale = s.size / 100;
   const size = Math.round(SPRITE_SIZE * scale);
-
   ctx.save();
   ctx.translate(px, py);
-
-  // Direction indicator
   const rad = s.direction * Math.PI / 180;
   const len = size * 0.8;
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(len * Math.sin(rad), -len * Math.cos(rad));
-  ctx.strokeStyle = '#4C97FF';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-
-  // Cat circle body
-  ctx.beginPath();
-  ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
-  ctx.fillStyle = '#FFB74D';
-  ctx.fill();
-  ctx.strokeStyle = '#F57C00';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  // Eyes (look in direction of movement)
-  const eyeOff = size * 0.2;
-  const eyeR = size * 0.08;
-  const lookX = Math.sin(rad) * 2;
-  const lookY = -Math.cos(rad) * 2;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(len * Math.sin(rad), -len * Math.cos(rad));
+  ctx.strokeStyle = '#4C97FF'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
+  ctx.fillStyle = '#FFB74D'; ctx.fill(); ctx.strokeStyle = '#F57C00'; ctx.lineWidth = 2; ctx.stroke();
+  const eyeOff = size * 0.2, eyeR = size * 0.08;
+  const lookX = Math.sin(rad) * 2, lookY = -Math.cos(rad) * 2;
   ctx.fillStyle = '#333';
   ctx.beginPath(); ctx.arc(-eyeOff + lookX, -size * 0.1 + lookY, eyeR, 0, Math.PI * 2); ctx.fill();
   ctx.beginPath(); ctx.arc(eyeOff + lookX, -size * 0.1 + lookY, eyeR, 0, Math.PI * 2); ctx.fill();
-
-  // Mouth
-  ctx.beginPath();
-  ctx.arc(0, size * 0.1, size * 0.12, 0, Math.PI);
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // Ears
+  ctx.beginPath(); ctx.arc(0, size * 0.1, size * 0.12, 0, Math.PI); ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5; ctx.stroke();
   ctx.fillStyle = '#FFB74D';
-  ctx.beginPath();
-  ctx.moveTo(-size * 0.35, -size * 0.3);
-  ctx.lineTo(-size * 0.2, -size * 0.55);
-  ctx.lineTo(-size * 0.05, -size * 0.3);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(size * 0.35, -size * 0.3);
-  ctx.lineTo(size * 0.2, -size * 0.55);
-  ctx.lineTo(size * 0.05, -size * 0.3);
-  ctx.fill();
-
+  ctx.beginPath(); ctx.moveTo(-size * 0.35, -size * 0.3); ctx.lineTo(-size * 0.2, -size * 0.55); ctx.lineTo(-size * 0.05, -size * 0.3); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(size * 0.35, -size * 0.3); ctx.lineTo(size * 0.2, -size * 0.55); ctx.lineTo(size * 0.05, -size * 0.3); ctx.fill();
   ctx.restore();
 }
 
-// ── Blockly block definitions that depend on built-in blocks ───────
+// ── AsyncFunction constructor ───────────────────────────────────────
 
-Blockly.Blocks['scratch_wait'] = {
-  init: function () {
-    this.jsonInit({
-      message0: 'wait %1 seconds',
-      args0: [{ type: 'input_value', name: 'SECONDS', check: 'Number' }],
-      previousStatement: null, nextStatement: null, colour: 330,
-    });
-  },
+type AsyncFunctionConstructor = new (code: string) => () => Promise<void>;
+const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as AsyncFunctionConstructor;
+
+// ── Category name normalizer ────────────────────────────────────────
+// LLMs replying in Chinese sometimes output Chinese category names even when
+// the system prompt specifies English. Map aliases → canonical English name.
+const CATEGORY_ALIASES: Record<string, string> = {
+  // Traditional Chinese
+  動作: 'Motion', 外觀: 'Looks', 音效: 'Sound', 事件: 'Events',
+  控制: 'Control', 偵測: 'Sensing', 邏輯: 'Logic', 文字: 'Text',
+  數學: 'Math', 數學運算: 'Math', 變數: 'Variables',
+  // Simplified Chinese
+  动作: 'Motion', 外观: 'Looks', 声音: 'Sound',
+  侦测: 'Sensing', 逻辑: 'Logic', 数学: 'Math', 变量: 'Variables',
 };
 
-javascriptGenerator.forBlock['scratch_wait'] = function (block) {
-  const seconds = javascriptGenerator.valueToCode(block, 'SECONDS', javascriptGenerator.Order.NONE) || '1';
-  return `await window.__scratchWait(${seconds});\n`;
-};
+function normalizeCategory(raw: string): string {
+  const trimmed = raw.trim();
+  // Exact match (already English)
+  if (trimmed) {
+    const alias = CATEGORY_ALIASES[trimmed];
+    if (alias) return alias;
+    // Case-insensitive match for English variants (e.g. 'motion' → 'Motion')
+    const lower = trimmed.toLowerCase();
+    const mapped: Record<string, string> = {
+      motion: 'Motion', looks: 'Looks', sound: 'Sound', events: 'Events',
+      control: 'Control', sensing: 'Sensing', logic: 'Logic', text: 'Text',
+      math: 'Math', variables: 'Variables',
+    };
+    if (mapped[lower]) return mapped[lower];
+  }
+  return trimmed;
+}
 
-// ── Component ──────────────────────────────────────────────────────
+// ── Component ───────────────────────────────────────────────────────
 
-export const BlocklyPanel = forwardRef<BlocklyPanelHandle>(function BlocklyPanel(_, ref) {
+export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
+  objectiveDescription?: string;
+  objectives?: { id: string; label: string }[];
+  selectedObjective?: number;
+  onSelectObjective?: (idx: number) => void;
+  onBlockChange?: (blocks: BlockData[]) => void;
+  onAskAboutBlock?: (blockRef: string, description: string) => void;
+  partnerStatus?: 'idle' | 'analyzing' | 'intervening';
+}>(function BlocklyPanel({
+  objectiveDescription, objectives, selectedObjective, onSelectObjective,
+  onBlockChange, onAskAboutBlock, partnerStatus = 'idle',
+}, ref) {
   const [output, setOutput] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [sprite, setSprite] = useState<SpriteState>(defaultSprite);
   const [mouseCoords, setMouseCoords] = useState({ x: 0, y: 0 });
-  const [keysDown, setKeysDown] = useState<Set<string>>(new Set());
+  // blockRef → BlockTip
+  const [blockTips, setBlockTips] = useState<Map<string, BlockTip>>(new Map());
 
   const workspaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -510,56 +367,30 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle>(function BlocklyPanel
   const keysRef = useRef<Set<string>>(new Set());
   const mouseRef = useRef({ x: 0, y: 0 });
   const outputRef = useRef<string[]>([]);
-  const blockRefsMap = useRef<Map<string, string>>(new Map());
+  const blockRefsMap = useRef<Map<string, string>>(new Map()); // blockId → refId
+  const highlightToken = useRef<object | null>(null); // cancels in-flight highlight loops
+  const onBlockChangeRef = useRef(onBlockChange);
+  onBlockChangeRef.current = onBlockChange;
+  const onAskAboutBlockRef = useRef(onAskAboutBlock);
+  onAskAboutBlockRef.current = onAskAboutBlock;
+  const broadcastHandlers = useRef<Map<string, Array<() => Promise<void>>>>(new Map());
+  const spriteClickHandlers = useRef<Array<() => Promise<void>>>([]);
+  const triggerRunRef = useRef<() => void>(() => { /* initialized after handleStart */ });
 
-  const describeBlockTree = useCallback((block: Blockly.Block, indent: number = 0): string => {
-    const pad = '  '.repeat(indent);
-    let result = pad + '→ ' + block.toString() + '\n';
-    for (const input of block.inputList) {
-      const target = input.connection?.targetBlock();
-      if (target) result += describeBlockTree(target, indent + 1);
-    }
-    const next = block.nextConnection?.targetBlock();
-    if (next) result += describeBlockTree(next, indent);
-    return result;
+  // ── Tip helpers ─────────────────────────────────────────────────
+
+  const internalShowTip = useCallback((blockId: string, message: string): string => {
+    const refId = `#tip${Date.now()}`;
+    setBlockTips(prev => new Map(prev).set(refId, { blockId, message }));
+    const timer = setTimeout(() => {
+      setBlockTips(prev => { const next = new Map(prev); next.delete(refId); return next; });
+    }, 12000);
+    // Return cleanup so callers can cancel early
+    void timer;
+    return refId;
   }, []);
 
-  useImperativeHandle(ref, () => ({
-    getContext() {
-      const ws = workspace.current;
-      if (!ws) return 'Scratch pad: not initialized';
-      const s = spriteRef.current;
-      const topBlocks = ws.getTopBlocks(true);
-      blockRefsMap.current.clear();
-      let result = `Sprite: x=${Math.round(s.x)}, y=${Math.round(s.y)}, dir=${Math.round(s.direction)}, size=${s.size}%, visible=${s.visible}\n\nBlocks:\n`;
-      topBlocks.forEach((block, i) => {
-        const refId = `#ref${i + 1}`;
-        blockRefsMap.current.set(block.id, refId);
-        result += `${refId}:\n${describeBlockTree(block)}`;
-      });
-      return result || 'Scratch pad: empty';
-    },
-    highlightBlock(ref: string) {
-      const ws = workspace.current;
-      if (!ws) return;
-      const blockId = [...blockRefsMap.current.entries()].find(([, v]) => v === ref)?.[0];
-      if (!blockId) return;
-      const block = ws.getBlockById(blockId);
-      if (!block) return;
-      ws.getAllBlocks().forEach(b => b.setHighlighted(false));
-      block.setHighlighted(true);
-      ws.centerOnBlock(blockId);
-    },
-    suggestCategory(category: string) {
-      const ws = workspace.current;
-      if (!ws) return;
-      const toolbox = ws.getToolbox();
-      if (toolbox) toolbox.selectCategoryByName(category);
-    },
-    getOutputLogs() {
-      return [...outputRef.current];
-    },
-  }), [describeBlockTree]);
+  // ── Canvas helpers ───────────────────────────────────────────────
 
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -571,282 +402,634 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle>(function BlocklyPanel
 
   useEffect(() => { renderCanvas(); }, [renderCanvas]);
 
-  // Keyboard tracking
+  // ── Block description helper ─────────────────────────────────────
+
+  const describeBlockTree = useCallback((block: Blockly.Block, indent = 0): string => {
+    const pad = '  '.repeat(indent);
+    let result = pad + '→ ' + block.toString() + '\n';
+    for (const input of block.inputList) {
+      const target = input.connection?.targetBlock();
+      if (target) result += describeBlockTree(target, indent + 1);
+    }
+    const next = block.nextConnection?.targetBlock();
+    if (next) result += describeBlockTree(next, indent);
+    return result;
+  }, []);
+
+  const getBlockSnapshot = useCallback((): BlockData[] => {
+    const ws = workspace.current;
+    if (!ws) return [];
+    return extractAllBlocks(ws.getTopBlocks(true));
+  }, []);
+
+  // ── Keyboard tracking ────────────────────────────────────────────
+
   useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      keysRef.current = new Set(keysRef.current).add(e.key);
-      setKeysDown(new Set(keysRef.current));
-    };
-    const up = (e: KeyboardEvent) => {
-      const next = new Set(keysRef.current);
-      next.delete(e.key);
-      keysRef.current = next;
-      setKeysDown(next);
-    };
+    const down = (e: KeyboardEvent) => { keysRef.current = new Set(keysRef.current).add(e.key); };
+    const up = (e: KeyboardEvent) => { const s = new Set(keysRef.current); s.delete(e.key); keysRef.current = s; };
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
   }, []);
 
-  // Init Blockly
+  // ── Blockly init ─────────────────────────────────────────────────
+
   useEffect(() => {
     const container = workspaceRef.current;
     if (!container) return;
-    workspace.current = Blockly.inject(container, {
+
+    const ws = Blockly.inject(container, {
       toolbox: TOOLBOX,
       grid: { spacing: 20, length: 3, colour: '#E8DDD0', snap: true },
       move: { scrollbars: true, drag: true, wheel: true },
       zoom: { controls: true, wheel: true, startScale: 0.85 },
       trashcan: true,
     });
-    return () => { workspace.current?.dispose(); workspace.current = null; };
+    workspace.current = ws;
+
+    // Context menu: "Ask AI to explain"
+    const menuId = 'ai_explain_block';
+    if (!Blockly.ContextMenuRegistry.registry.getItem(menuId)) {
+      Blockly.ContextMenuRegistry.registry.register({
+        id: menuId,
+        displayText: () => '🤖 Ask AI to explain',
+        preconditionFn: () => 'enabled',
+        callback: (scope: Blockly.ContextMenuRegistry.Scope) => {
+          const block = scope.block;
+          if (!block) return;
+          const description = block.toString();
+          const refId = blockRefsMap.current.get(block.id) ?? block.id;
+          onAskAboutBlockRef.current?.(refId, description);
+        },
+        scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+        weight: 100,
+      });
+    }
+
+    const handleChange = () => {
+      const blocks = extractAllBlocks(ws.getTopBlocks(true));
+      onBlockChangeRef.current?.(blocks);
+    };
+    ws.addChangeListener(handleChange);
+    handleChange();
+
+    return () => { ws.removeChangeListener(handleChange); ws.dispose(); workspace.current = null; };
   }, []);
 
-  // ── Window API for generated code ───────────────────────────────
+  // ── Imperative handle ────────────────────────────────────────────
+
+  useImperativeHandle(ref, () => ({
+    // ── Observation ────────────────────────────────────────────────
+    getContext() {
+      const ws = workspace.current;
+      if (!ws) return 'Scratch pad: not initialized';
+      const s = spriteRef.current;
+      blockRefsMap.current.clear();
+      const topBlocks = ws.getTopBlocks(true);
+      let refCounter = 0;
+
+      const assignRef = (block: Blockly.Block): string => {
+        refCounter++;
+        const refId = `#ref${refCounter}`;
+        blockRefsMap.current.set(block.id, refId);
+        return refId;
+      };
+
+      const describeTree = (block: Blockly.Block, indent: number): string => {
+        const pad = '  '.repeat(indent);
+        const ref = assignRef(block);
+        let result = `${pad}${ref} [${block.type}] ${block.toString()}\n`;
+        for (const input of block.inputList) {
+          const target = input.connection?.targetBlock();
+          if (target) result += describeTree(target, indent + 1);
+        }
+        const next = block.nextConnection?.targetBlock();
+        if (next) result += describeTree(next, indent);
+        return result;
+      };
+
+      let result = `Sprite: x=${Math.round(s.x)}, y=${Math.round(s.y)}, dir=${Math.round(s.direction)}, size=${s.size}%, visible=${s.visible}\n\nBlocks:\n`;
+      for (const block of topBlocks) {
+        result += describeTree(block, 0);
+        result += '\n';
+      }
+      return result || 'Scratch pad: empty';
+    },
+    getBlockSnapshot,
+    getGeneratedCode() {
+      const ws = workspace.current;
+      if (!ws) return '';
+      return javascriptGenerator.workspaceToCode(ws);
+    },
+    getOutputLogs() { return [...outputRef.current]; },
+
+    // ── Pointing ───────────────────────────────────────────────────
+    highlightBlock(refId: string) {
+      const ws = workspace.current;
+      if (!ws) return;
+      const blockId = resolveRef(refId, blockRefsMap.current);
+      if (!blockId) return;
+      const block = ws.getBlockById(blockId);
+      if (!block) return;
+      ws.getAllBlocks().forEach(b => b.setHighlighted(false));
+      block.setHighlighted(true);
+      ws.centerOnBlock(blockId);
+    },
+    zoomToBlock(refId: string) {
+      const ws = workspace.current;
+      if (!ws) return;
+      const blockId = resolveRef(refId, blockRefsMap.current);
+      if (!blockId) return;
+      ws.centerOnBlock(blockId);
+    },
+    zoomToFit() { workspace.current?.zoomToFit(); },
+
+    // ── Annotation ─────────────────────────────────────────────────
+    showBlockTip(refId: string, message: string) {
+      const blockId = resolveRef(refId, blockRefsMap.current);
+      if (blockId) internalShowTip(blockId, message);
+    },
+    clearBlockTips() { setBlockTips(new Map()); },
+
+    // ── Building ───────────────────────────────────────────────────
+    suggestCategory(category: string) {
+      const ws = workspace.current;
+      if (!ws) { console.warn('[suggestCategory] no workspace'); return; }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const toolbox = ws.getToolbox() as any;
+      if (!toolbox) { console.warn('[suggestCategory] no toolbox'); return; }
+      const items: any[] = toolbox.getToolboxItems?.() ?? [];
+      const normalized = normalizeCategory(category);
+      const item = items.find((it: any) => it.getName?.() === normalized);
+      console.log('[suggestCategory]', category, '→', normalized, '→ found:', !!item);
+      if (item && toolbox.getSelectedItem?.() !== item) toolbox.setSelectedItem(item);
+    },
+    highlightToolboxBlock(category: string, blockType: string) {
+      const ws = workspace.current;
+      if (!ws) { console.warn('[highlightToolboxBlock] no workspace'); return; }
+
+      // Cancel any previous in-flight highlight loop
+      const token = {};
+      highlightToken.current = token;
+
+      const normalizedCategory = normalizeCategory(category);
+      const openCategory = () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const toolbox = ws.getToolbox() as any;
+        if (!toolbox) return;
+        const items: any[] = toolbox.getToolboxItems?.() ?? [];
+        const item = items.find((it: any) => it.getName?.() === normalizedCategory);
+        if (item && toolbox.getSelectedItem?.() !== item) {
+          console.log('[highlightToolboxBlock] opening category', category, '→', normalizedCategory);
+          toolbox.setSelectedItem(item);
+        }
+      };
+
+      openCategory();
+
+      let attempts = 0;
+      const tryHighlight = () => {
+        if (highlightToken.current !== token) return; // superseded by a newer call
+        attempts++;
+        const flyout = ws.getFlyout();
+        const flyoutWs = flyout?.getWorkspace();
+        const blocks = (flyoutWs?.getTopBlocks(false) ?? []) as Blockly.BlockSvg[];
+        console.log('[highlightToolboxBlock]', blockType, 'attempt', attempts, '— blocks:', blocks.length);
+        if (!flyoutWs || blocks.length === 0) {
+          openCategory();
+          if (attempts < 12) setTimeout(tryHighlight, 200);
+          return;
+        }
+        blocks.forEach(b => {
+          (b.getSvgRoot() as SVGGElement | null)?.classList.remove('blockly-ai-target');
+        });
+        const targetBlock = blocks.find(b => b.type === blockType);
+        console.log('[highlightToolboxBlock] looking for', blockType, '→ found:', !!targetBlock);
+        if (!targetBlock) {
+          openCategory();
+          if (attempts < 12) setTimeout(tryHighlight, 200);
+          return;
+        }
+        const svgRoot = targetBlock.getSvgRoot() as SVGGElement | null;
+        if (svgRoot) {
+          svgRoot.classList.add('blockly-ai-target');
+          setTimeout(() => svgRoot.classList.remove('blockly-ai-target'), 6000);
+        }
+        internalShowTip(targetBlock.id, '👉 Use this block');
+        console.log('[highlightToolboxBlock] ✅', blockType);
+      };
+      setTimeout(tryHighlight, 200);
+    },
+    insertBlock(type: string): string {
+      const ws = workspace.current;
+      if (!ws) return '';
+      try {
+        const block = ws.newBlock(type) as Blockly.BlockSvg;
+        block.initSvg();
+        block.render();
+        const metrics = ws.getMetrics();
+        const stackCount = blockRefsMap.current.size;
+        const x = metrics.viewLeft + metrics.viewWidth * 0.6;
+        const y = metrics.viewTop + 40 + stackCount * 80;
+        block.moveTo(new Blockly.utils.Coordinate(x, y));
+        ws.centerOnBlock(block.id);
+        const refId = `#ai${stackCount + 1}`;
+        blockRefsMap.current.set(block.id, refId);
+        return refId;
+      } catch (e) {
+        console.error('[insertBlock] failed:', type, e);
+        return '';
+      }
+    },
+    deleteBlock(refId: string) {
+      const ws = workspace.current;
+      if (!ws) return;
+      const blockId = resolveRef(refId, blockRefsMap.current);
+      if (!blockId) return;
+      const block = ws.getBlockById(blockId);
+      if (!block) return;
+      block.dispose(true);
+      blockRefsMap.current.delete(blockId);
+    },
+    setBlockField(refId: string, fieldName: string, value: string) {
+      const ws = workspace.current;
+      if (!ws) return;
+      const blockId = resolveRef(refId, blockRefsMap.current);
+      if (!blockId) return;
+      ws.getBlockById(blockId)?.setFieldValue(value, fieldName);
+    },
+    connectBelow(topRef: string, bottomRef: string) {
+      const ws = workspace.current;
+      if (!ws) return;
+      const topId = resolveRef(topRef, blockRefsMap.current);
+      const botId = resolveRef(bottomRef, blockRefsMap.current);
+      if (!topId || !botId) return;
+      const top = ws.getBlockById(topId) as Blockly.BlockSvg | null;
+      const bot = ws.getBlockById(botId) as Blockly.BlockSvg | null;
+      if (!top?.nextConnection || !bot?.previousConnection) return;
+      top.nextConnection.connect(bot.previousConnection);
+    },
+    wrapInLoop(refId: string, loopType = 'controls_whileUntil') {
+      const ws = workspace.current;
+      if (!ws) return;
+      const blockId = resolveRef(refId, blockRefsMap.current);
+      if (!blockId) return;
+      const target = ws.getBlockById(blockId) as Blockly.BlockSvg | null;
+      if (!target) return;
+
+      // Find the topmost block in the chain
+      let top: Blockly.BlockSvg = target;
+      while (top.previousConnection?.targetBlock()) {
+        top = top.previousConnection.targetBlock() as Blockly.BlockSvg;
+      }
+
+      const pos = top.getRelativeToSurfaceXY();
+      const prevConn = top.previousConnection?.targetConnection ?? null;
+      if (top.previousConnection?.isConnected()) top.previousConnection.disconnect();
+
+      // Create loop block
+      const loop = ws.newBlock(loopType) as Blockly.BlockSvg;
+      loop.initSvg();
+      loop.render();
+
+      if (loopType === 'controls_whileUntil') {
+        const cond = ws.newBlock('logic_boolean') as Blockly.BlockSvg;
+        cond.initSvg(); cond.render();
+        cond.setFieldValue('TRUE', 'BOOL');
+        const boolInput = loop.getInput('BOOL');
+        if (boolInput?.connection && cond.outputConnection) {
+          boolInput.connection.connect(cond.outputConnection);
+        }
+        loop.setFieldValue('WHILE', 'MODE');
+      } else if (loopType === 'controls_repeat_ext') {
+        const num = ws.newBlock('math_number') as Blockly.BlockSvg;
+        num.initSvg(); num.render();
+        num.setFieldValue('10', 'NUM');
+        const timesInput = loop.getInput('TIMES');
+        if (timesInput?.connection && num.outputConnection) {
+          timesInput.connection.connect(num.outputConnection);
+        }
+      }
+
+      loop.moveTo(pos);
+
+      const doInput = loop.getInput('DO');
+      if (doInput?.connection && top.previousConnection) {
+        doInput.connection.connect(top.previousConnection);
+      }
+      if (prevConn && loop.previousConnection) {
+        prevConn.connect(loop.previousConnection);
+      }
+
+      const newRefId = `#ai${blockRefsMap.current.size + 1}`;
+      blockRefsMap.current.set(loop.id, newRefId);
+      ws.render();
+      ws.centerOnBlock(loop.id);
+      internalShowTip(loop.id, '🔁 Loop added — drag your blocks inside');
+    },
+
+    // ── Examples ───────────────────────────────────────────────────
+    addExampleChain(conceptName: string) {
+      const ws = workspace.current;
+      if (!ws) return;
+      const xmlString = EXAMPLE_CHAINS[conceptName];
+      if (!xmlString) { console.warn('[addExampleChain] unknown concept:', conceptName); return; }
+      try {
+        const beforeIds = new Set(ws.getAllBlocks().map(b => b.id));
+        const xml = Blockly.utils.xml.textToDom(xmlString);
+        Blockly.Xml.domToWorkspace(xml, ws);
+        const newBlocks = ws.getAllBlocks().filter(b => !beforeIds.has(b.id));
+        if (newBlocks.length === 0) return;
+        const first = newBlocks[0] as Blockly.BlockSvg;
+        ws.centerOnBlock(first.id);
+        const refId = `#ex${blockRefsMap.current.size + 1}`;
+        blockRefsMap.current.set(first.id, refId);
+        // Small delay lets Blockly finish rendering before we compute position
+        setTimeout(() => { internalShowTip(first.id, `💡 AI Example: ${conceptName}`); }, 120);
+      } catch (e) {
+        console.error('[addExampleChain] failed:', conceptName, e);
+      }
+    },
+    runProgram() { triggerRunRef.current(); },
+  }), [getBlockSnapshot, internalShowTip]);
+
+  // ── Main run loop ────────────────────────────────────────────────
 
   const handleStart = useCallback(async () => {
     const ws = workspace.current;
     if (!ws || isRunning) return;
-
     const abort = new AbortController();
     abortRef.current = abort;
     setIsRunning(true);
     setOutput([]);
     outputRef.current = [];
+    spriteRef.current = defaultSprite();
+    renderCanvas();
+    setSprite(defaultSprite());
 
     const s = spriteRef.current;
     const sig = abort.signal;
+    let costumeNum = 1;
+    window.__scratchAnswer = '';
+    broadcastHandlers.current = new Map();
+    spriteClickHandlers.current = [];
 
     window.__scratchPos = () => s;
     window.__scratchMousePos = () => mouseRef.current;
     window.__scratchKeyPressed = (k: string) => keysRef.current.has(k);
 
-    window.__scratchMove = (steps: number) => new Promise<void>((resolve, reject) => {
+    const mkMovePromise = (fn: () => void) => new Promise<void>((resolve, reject) => {
       if (sig.aborted) return reject(Error('STOPPED'));
+      fn();
+      renderCanvas();
+      setSprite({ ...s });
+      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+    });
+
+    window.__scratchMove = (steps) => mkMovePromise(() => {
       const rad = s.direction * Math.PI / 180;
-      s.x += steps * Math.sin(rad);
-      s.y += steps * Math.cos(rad);
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
+      s.x += steps * Math.sin(rad); s.y += steps * Math.cos(rad);
     });
+    window.__scratchTurn = (deg) => mkMovePromise(() => { s.direction = ((s.direction + deg) % 360 + 360) % 360; });
+    window.__scratchGoTo = (x, y) => mkMovePromise(() => { s.x = x; s.y = y; });
+    window.__scratchChangeX = (dx) => mkMovePromise(() => { s.x += dx; });
+    window.__scratchSetX = (x) => mkMovePromise(() => { s.x = x; });
+    window.__scratchChangeY = (dy) => mkMovePromise(() => { s.y += dy; });
+    window.__scratchSetY = (y) => mkMovePromise(() => { s.y = y; });
+    window.__scratchShow = () => mkMovePromise(() => { s.visible = true; });
+    window.__scratchHide = () => mkMovePromise(() => { s.visible = false; });
+    window.__scratchChangeSize = (d) => mkMovePromise(() => { s.size = Math.max(5, s.size + d); });
+    window.__scratchSetSize = (sz) => mkMovePromise(() => { s.size = Math.max(5, sz); });
 
-    window.__scratchTurn = (deg: number) => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      s.direction = ((s.direction + deg) % 360 + 360) % 360;
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
-    });
-
-    window.__scratchGoTo = (x: number, y: number) => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      s.x = x; s.y = y;
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
-    });
-
-    window.__scratchChangeX = (dx: number) => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      s.x += dx;
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
-    });
-
-    window.__scratchSetX = (x: number) => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      s.x = x;
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
-    });
-
-    window.__scratchChangeY = (dy: number) => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      s.y += dy;
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
-    });
-
-    window.__scratchSetY = (y: number) => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      s.y = y;
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
-    });
-
-    window.__scratchBounce = () => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      const margin = 25 * (s.size / 100);
-      const half = COORD_RANGE - margin;
+    window.__scratchBounce = () => mkMovePromise(() => {
+      const margin = 25 * (s.size / 100), half = COORD_RANGE - margin;
       if (s.x > half) { s.x = half; s.direction = 180 - s.direction; }
       if (s.x < -half) { s.x = -half; s.direction = 180 - s.direction; }
       if (s.y > half) { s.y = half; s.direction = -s.direction; }
       if (s.y < -half) { s.y = -half; s.direction = -s.direction; }
       s.direction = ((s.direction % 360) + 360) % 360;
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
     });
 
-    window.__scratchGlide = (secs: number, tx: number, ty: number) =>
+    window.__scratchGlide = (secs, tx, ty) =>
       new Promise<void>((resolve, reject) => {
         if (sig.aborted) return reject(Error('STOPPED'));
-        const sx = s.x, sy = s.y;
-        const start = performance.now();
-        function tick(time: number) {
+        const sx = s.x, sy = s.y, start = performance.now();
+        function tick(t: number) {
           if (sig.aborted) return reject(Error('STOPPED'));
-          const t = Math.min((time - start) / (secs * 1000), 1);
-          s.x = sx + (tx - sx) * t;
-          s.y = sy + (ty - sy) * t;
-          renderCanvas();
-          setSprite({ ...s });
-          if (t < 1) requestAnimationFrame(tick);
-          else resolve();
+          const p = Math.min((t - start) / (secs * 1000), 1);
+          s.x = sx + (tx - sx) * p; s.y = sy + (ty - sy) * p;
+          renderCanvas(); setSprite({ ...s });
+          if (p < 1) requestAnimationFrame(tick); else resolve();
         }
         requestAnimationFrame(tick);
       });
 
-    window.__scratchSay = (text: string) => {
+    window.__scratchSay = (text) => {
       if (sig.aborted) throw Error('STOPPED');
       outputRef.current = [...outputRef.current, String(text)];
       setOutput([...outputRef.current]);
     };
-
-    window.__scratchSaySeconds = (text: string, secs: number) =>
+    window.__scratchSaySeconds = (text, secs) =>
       new Promise<void>((resolve, reject) => {
         if (sig.aborted) return reject(Error('STOPPED'));
-        outputRef.current = [...outputRef.current, String(text)];
-        setOutput([...outputRef.current]);
-        setTimeout(() => {
-          if (sig.aborted) return reject(Error('STOPPED'));
-          resolve();
-        }, secs * 1000);
+        outputRef.current = [...outputRef.current, String(text)]; setOutput([...outputRef.current]);
+        setTimeout(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); }, secs * 1000);
       });
-
-    window.__scratchShow = () => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      s.visible = true;
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
-    });
-
-    window.__scratchHide = () => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      s.visible = false;
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
-    });
-
-    window.__scratchChangeSize = (delta: number) => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      s.size = Math.max(5, s.size + delta);
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
-    });
-
-    window.__scratchSetSize = (size: number) => new Promise<void>((resolve, reject) => {
-      if (sig.aborted) return reject(Error('STOPPED'));
-      s.size = Math.max(5, size);
-      renderCanvas();
-      setSprite({ ...s });
-      requestAnimationFrame(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); });
-    });
-
-    window.__scratchWait = (seconds: number) =>
+    window.__scratchWait = (seconds) =>
       new Promise<void>((resolve, reject) => {
         if (sig.aborted) return reject(Error('STOPPED'));
-        const timer = setTimeout(resolve, seconds * 1000);
-        sig.addEventListener('abort', () => { clearTimeout(timer); reject(Error('STOPPED')); });
+        const t = setTimeout(resolve, seconds * 1000);
+        sig.addEventListener('abort', () => { clearTimeout(t); reject(Error('STOPPED')); });
       });
+    window.__scratchAsk = (q) => { window.__scratchAnswer = prompt(String(q)) ?? ''; };
+    window.__scratchPlaySound = (name) => {
+      outputRef.current = [...outputRef.current, `🔊 ${name}`]; setOutput([...outputRef.current]);
+    };
+    window.__scratchSwitchCostume = (num) => { costumeNum = Math.max(1, Math.round(num)); };
+    window.__scratchNextCostume = () => { costumeNum++; };
+    window.__scratchCostumeNumber = () => costumeNum;
 
+    window.__scratchBroadcast = async (msg) => {
+      const handlers = broadcastHandlers.current.get(msg) ?? [];
+      await Promise.all(handlers.map(h => h().catch(err => { if ((err as Error)?.message !== 'STOPPED') console.error('Broadcast error:', err); })));
+    };
+    window.__scratchCreateClone = () => { /* stub */ };
+    window.__scratchDeleteClone = () => { s.visible = false; renderCanvas(); setSprite({ ...s }); };
     window.__scratchTouchingMouse = () => {
-      const m = mouseRef.current;
-      const dx = s.x - m.x;
-      const dy = s.y - m.y;
-      const r = 15 * (s.size / 100);
+      const m = mouseRef.current, dx = s.x - m.x, dy = s.y - m.y, r = 15 * (s.size / 100);
       return Math.sqrt(dx * dx + dy * dy) < r;
     };
-
     window.__scratchTouchingEdge = () => {
       const r = 15 * (s.size / 100);
-      return s.x + r > COORD_RANGE || s.x - r < -COORD_RANGE ||
-             s.y + r > COORD_RANGE || s.y - r < -COORD_RANGE;
+      return s.x + r > COORD_RANGE || s.x - r < -COORD_RANGE || s.y + r > COORD_RANGE || s.y - r < -COORD_RANGE;
     };
-
     window.__scratchDistToMouse = () => {
       const m = mouseRef.current;
       return Math.sqrt((s.x - m.x) ** 2 + (s.y - m.y) ** 2);
     };
 
-    const code = javascriptGenerator.workspaceToCode(ws);
-    if (!code.trim()) { setIsRunning(false); abortRef.current = null; return; }
+    const topBlocks = ws.getTopBlocks(true);
+    const flagScripts: Array<() => Promise<void>> = [];
+    const keyScripts = new Map<string, Array<() => Promise<void>>>();
+    const anyKeyScripts: Array<() => Promise<void>> = [];
 
-    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
-    try {
-      const fn = new AsyncFunction(code);
-      await fn();
-    } catch (e) {
-      if ((e as Error)?.message !== 'STOPPED') console.error('Blockly error:', e);
+    for (const block of topBlocks) {
+      const bodyCode = (javascriptGenerator.blockToCode(block) as string) || '';
+      if (!bodyCode.trim()) continue;
+      const runner = new AsyncFunction(bodyCode);
+      switch (block.type) {
+        case 'event_whenflagclicked': flagScripts.push(runner); break;
+        case 'event_whenkeypressed': {
+          const key = block.getFieldValue('KEY') as string;
+          if (key === 'any') anyKeyScripts.push(runner);
+          else keyScripts.set(key, [...(keyScripts.get(key) ?? []), runner]);
+          break;
+        }
+        case 'event_whenthisspriteclicked': spriteClickHandlers.current.push(runner); break;
+        case 'scratch_whenireceive': {
+          const msgBlock = block.getInputTargetBlock('MESSAGE');
+          const msg = (msgBlock?.getFieldValue('TEXT') as string | null) ?? '';
+          if (msg) broadcastHandlers.current.set(msg, [...(broadcastHandlers.current.get(msg) ?? []), runner]);
+          break;
+        }
+        default: break;
+      }
     }
 
-    setIsRunning(false);
-    abortRef.current = null;
+    const keysCurrentlyDown = new Set<string>();
+    const handleKeyEdgeDown = (e: KeyboardEvent) => {
+      if (sig.aborted || keysCurrentlyDown.has(e.key)) return;
+      keysCurrentlyDown.add(e.key);
+      const handlers = [...(keyScripts.get(e.key) ?? []), ...anyKeyScripts];
+      for (const h of handlers) void h().catch(err => { if ((err as Error)?.message !== 'STOPPED') console.error('Key handler error:', err); });
+    };
+    const handleKeyEdgeUp = (e: KeyboardEvent) => { keysCurrentlyDown.delete(e.key); };
+
+    const hasEventHandlers = keyScripts.size > 0 || anyKeyScripts.length > 0 || spriteClickHandlers.current.length > 0 || broadcastHandlers.current.size > 0;
+    window.addEventListener('keydown', handleKeyEdgeDown);
+    window.addEventListener('keyup', handleKeyEdgeUp);
+    const keepAlive = hasEventHandlers
+      ? new Promise<void>(resolve => { sig.addEventListener('abort', () => resolve()); })
+      : Promise.resolve();
+    const handleErr = (err: unknown) => { if ((err as Error)?.message !== 'STOPPED') console.error('Blockly error:', err); };
+
+    try {
+      await Promise.all([keepAlive, ...flagScripts.map(fn => fn().catch(handleErr))]);
+    } finally {
+      window.removeEventListener('keydown', handleKeyEdgeDown);
+      window.removeEventListener('keyup', handleKeyEdgeUp);
+      spriteClickHandlers.current = [];
+      broadcastHandlers.current = new Map();
+      setIsRunning(false);
+      abortRef.current = null;
+    }
   }, [isRunning, renderCanvas]);
 
-  const handleStop = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
+  // Keep triggerRunRef current
+  useEffect(() => { triggerRunRef.current = () => { void handleStart(); }; }, [handleStart]);
+
+  const handleStop = useCallback(() => { abortRef.current?.abort(); }, []);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const [sx, sy] = canvasToScratch(px, py);
+    const [sx, sy] = canvasToScratch(e.clientX - rect.left, e.clientY - rect.top);
     mouseRef.current = { x: Math.round(sx), y: Math.round(sy) };
     setMouseCoords({ x: Math.round(sx), y: Math.round(sy) });
   }, []);
 
+  const handleCanvasClick = useCallback(() => {
+    if (!isRunning) return;
+    for (const h of spriteClickHandlers.current) {
+      void h().catch(err => { if ((err as Error)?.message !== 'STOPPED') console.error('Click handler error:', err); });
+    }
+  }, [isRunning]);
+
+  // ── Tip overlay positioning ──────────────────────────────────────
+
+  function computeTipStyle(tip: BlockTip): React.CSSProperties {
+    const ws = workspace.current;
+    const container = workspaceRef.current;
+    if (!ws || !container) return { display: 'none' };
+    let block = ws.getBlockById(tip.blockId) as Blockly.BlockSvg | null;
+    if (!block) {
+      const flyout = ws.getFlyout();
+      if (flyout) {
+        const flyoutWs = flyout.getWorkspace();
+        if (flyoutWs) block = flyoutWs.getBlockById(tip.blockId) as Blockly.BlockSvg | null;
+      }
+    }
+    if (!block) return { display: 'none' };
+    const svgEl = block.getSvgRoot();
+    if (!svgEl) return { display: 'none' };
+    const blockRect = svgEl.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    return {
+      left: blockRect.left - containerRect.left,
+      top: Math.max(4, blockRect.top - containerRect.top - 48),
+    };
+  }
+
+  // ── Render ───────────────────────────────────────────────────────
+
+  const partnerLabel = partnerStatus === 'analyzing' ? '🔍 Checking…' : partnerStatus === 'intervening' ? '💡 Helping!' : '🤖 AI';
+
   return (
     <div className="scratch-panel-inner">
       <div className="scratch-toolbar">
-        <button className="scratch-flag-btn" onClick={handleStart} disabled={isRunning} title="Start">
+        <button className="scratch-flag-btn" onClick={() => { void handleStart(); }} disabled={isRunning} title="Start">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 4v16l14-8z" /></svg>
         </button>
         <button className="scratch-stop-btn" onClick={handleStop} disabled={!isRunning} title="Stop">
           <svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
         </button>
+        {objectives && objectives.length > 0 && (
+          <span className="scratch-objectives">
+            {objectives.map((obj, i) => (
+              <button key={obj.id} className={`scratch-objective-btn ${selectedObjective === i ? 'active' : ''}`} onClick={() => onSelectObjective?.(i)}>
+                {obj.label}
+              </button>
+            ))}
+          </span>
+        )}
         <span className="scratch-coords">x: {Math.round(sprite.x)} y: {Math.round(sprite.y)} dir: {Math.round(sprite.direction)}</span>
+        <span className={`ai-partner-badge ai-partner-badge--${partnerStatus}`}>{partnerLabel}</span>
       </div>
+
+      {objectiveDescription && <div className="scratch-objective-desc">{objectiveDescription}</div>}
+
       <div className="scratch-body">
-        <div ref={workspaceRef} className="blockly-workspace" />
+        {/* Blockly workspace with tip overlay */}
+        <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <div ref={workspaceRef} className="blockly-workspace" />
+          {/* Tip bubbles */}
+          <div className="block-tips-overlay">
+            {Array.from(blockTips.entries()).map(([refId, tip]) => {
+              const style = computeTipStyle(tip);
+              if (style.display === 'none') return null;
+              return (
+                <div key={refId} className="block-tip-bubble" style={style}>
+                  <div className="block-tip-text">{tip.message}</div>
+                  <button className="block-tip-close" onClick={() => setBlockTips(prev => { const m = new Map(prev); m.delete(refId); return m; })}>×</button>
+                  <div className="block-tip-arrow" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="scratch-stage-area">
           <div className="scratch-stage-label">Stage</div>
-          <canvas
-            ref={canvasRef}
-            width={300}
-            height={300}
-            className="scratch-canvas"
-            onMouseMove={handleCanvasMouseMove}
-          />
+          <canvas ref={canvasRef} width={300} height={300} className="scratch-canvas" onMouseMove={handleCanvasMouseMove} onClick={handleCanvasClick} />
           <div className="scratch-sprite-info">
             <span>🐱 {sprite.size}%</span>
             <span>mouse: {mouseCoords.x}, {mouseCoords.y}</span>
           </div>
         </div>
       </div>
+
       <div className="scratch-output">
-        {output.map((msg, i) => (
-          <div key={i} className="scratch-bubble">{msg}</div>
-        ))}
+        {output.map((msg, i) => <div key={i} className="scratch-bubble">{msg}</div>)}
       </div>
     </div>
   );
