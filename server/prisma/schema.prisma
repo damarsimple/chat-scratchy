@@ -1,0 +1,122 @@
+// Prisma schema for chat-scratchy teacher dashboard.
+// Generated client lives in node_modules; run `npx prisma migrate dev` after edits.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Teacher {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+
+  classes Class[]
+}
+
+model Class {
+  id        String   @id @default(uuid())
+  name      String
+  joinCode  String   @unique
+  createdAt DateTime @default(now())
+
+  teacherId String
+  teacher   Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  students Student[]
+  sessions Session[]
+
+  @@index([teacherId])
+}
+
+model Student {
+  id          String   @id @default(uuid())
+  displayName String
+  // Opaque token stored in the student's localStorage for re-identification (no password).
+  clientToken String   @unique
+  createdAt   DateTime @default(now())
+
+  classId String
+  class   Class  @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  sessions Session[]
+
+  @@index([classId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  title        String   @default("New Chat")
+  objectiveId  String?
+  lang         String   @default("zh")
+  mode         String   @default("task")
+  // Chat transcript kept as a jsonb blob (matches the existing client message shape).
+  messages     Json     @default("[]")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+  lastActiveAt DateTime @default(now())
+
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: SetNull)
+
+  classId String?
+  class   Class?  @relation(fields: [classId], references: [id], onDelete: SetNull)
+
+  blocklySnapshots BlocklySnapshot[]
+  interventions    Intervention[]
+  activityEvents   ActivityEvent[]
+
+  @@index([studentId])
+  @@index([classId])
+  @@index([lastActiveAt])
+}
+
+model BlocklySnapshot {
+  id            String   @id @default(uuid())
+  // Blockly.serialization.workspaces.save() output.
+  workspaceJson Json
+  generatedCode String   @default("")
+  blockSummary  String   @default("")
+  createdAt     DateTime @default(now())
+
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([sessionId, createdAt])
+}
+
+model Intervention {
+  id            String   @id @default(uuid())
+  patternId     String?
+  message       String   @default("")
+  // 'helped' | 'ignored' | 'pending' | null
+  outcome       String?
+  blockSnapshot Json     @default("[]")
+  createdAt     DateTime @default(now())
+
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+}
+
+model ActivityEvent {
+  id        String   @id @default(uuid())
+  // 'confidence' | 'run' | 'stuck' | 'student_message' | 'block_change' | ...
+  type      String
+  payload   Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([sessionId, createdAt])
+}

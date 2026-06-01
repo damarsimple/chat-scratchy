@@ -26,6 +26,7 @@ export interface ProactiveAgentCallbacks {
     toolCalls: unknown[];
   }) => void;
   blocklyRef: React.RefObject<{ getContext(): string } | null>;
+  llmBusyRef: React.RefObject<boolean>;
 }
 
 const INTERVAL_MS = 30_000;
@@ -174,6 +175,7 @@ export function useProactiveAgent(
 
   runWatchdog.current = async () => {
     if (document.visibilityState === 'hidden') { console.log('[watchdog] hidden, skip'); return; }
+    if (cbRef.current.llmBusyRef.current) { console.log('[watchdog] LLM busy, skip'); return; }
     // Reset backoff when tab becomes visible
     if (failCount.current > 0) {
       console.log('[watchdog] tab visible, resetting backoff from', failCount.current);

@@ -14,7 +14,7 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api\/chat/, '/v1/chat'),
       },
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:3500',
         changeOrigin: true,
       },
     },

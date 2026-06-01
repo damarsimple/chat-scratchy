@@ -1,82 +1,42 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { v4 as uuidv4 } from 'uuid';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import cookieParser from 'cookie-parser';
+
+import { authRouter } from './routes/auth.js';
+import { teacherRouter } from './routes/teacher.js';
+import { studentRouter } from './routes/student.js';
+import { streamRouter } from './routes/stream.js';
+import { prisma } from './lib/db.js';
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3500;
 
-const DATA_FILE = './sessions.json';
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json({ limit: '5mb' })); // blockly snapshots can be largish
+app.use(cookieParser());
 
-app.use(cors());
-app.use(express.json());
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-function loadSessions() {
-  if (existsSync(DATA_FILE)) {
-    try {
-      return JSON.parse(readFileSync(DATA_FILE, 'utf-8'));
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
+app.use('/api/auth', authRouter);
+app.use('/api/teacher', teacherRouter);
+app.use('/api/teacher', streamRouter); // GET /api/teacher/stream
+// Student + session endpoints (also serves the existing student app routes).
+app.use('/api', studentRouter);
 
-function saveSessions(sessions) {
-  writeFileSync(DATA_FILE, JSON.stringify(sessions, null, 2));
-}
-
-let sessions = loadSessions();
-
-app.get('/api/sessions', (_req, res) => {
-  const list = Object.entries(sessions).map(([id, data]) => {
-    const firstUserMsg = data.messages.find(m => m.role === 'user');
-    const title = firstUserMsg?.content?.slice(0, 50) || 'New Chat';
-    return { id, title, updatedAt: data.updatedAt };
-  });
-  list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  res.json(list);
+// Centralized error handler so a thrown route never hangs the request.
+app.use((err, _req, res, _next) => {
+  console.error('[server] error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
-app.post('/api/sessions', (_req, res) => {
-  const id = uuidv4();
-  const now = new Date().toISOString();
-  sessions[id] = { messages: [], createdAt: now, updatedAt: now };
-  saveSessions(sessions);
-  res.json({ id });
-});
-
-app.get('/api/sessions/:id', (req, res) => {
-  const { id } = req.params;
-  const session = sessions[id];
-  if (!session) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
-  res.json(session);
-});
-
-app.put('/api/sessions/:id', (req, res) => {
-  const { id } = req.params;
-  const { messages } = req.body;
-  if (!sessions[id]) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
-  sessions[id].messages = messages;
-  sessions[id].updatedAt = new Date().toISOString();
-  saveSessions(sessions);
-  res.json({ success: true });
-});
-
-app.delete('/api/sessions/:id', (req, res) => {
-  const { id } = req.params;
-  if (!sessions[id]) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
-  delete sessions[id];
-  saveSessions(sessions);
-  res.json({ success: true });
-});
-
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
+
+async function shutdown() {
+  await prisma.$disconnect();
+  server.close(() => process.exit(0));
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

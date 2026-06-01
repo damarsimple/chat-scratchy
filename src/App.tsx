@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef, useCallback, type KeyboardEvent } from 'react';
 import type { JSX } from 'react';
-import { marked } from 'marked';
 import { useI18n } from './i18n';
-import ZH_SYSTEM_PROMPT from './zh-sys-prompt.txt?raw';
 import EN_SYSTEM_PROMPT from './en-sys-prompt.txt?raw';
 import { BlocklyPanel } from './BlocklyPanel';
 import type { BlocklyPanelHandle } from './BlocklyPanel';
@@ -11,6 +9,12 @@ import { useActivityTracker } from './useActivityTracker';
 import { useInterventionTracker } from './useInterventionTracker';
 import { useProactiveAgent } from './useProactiveAgent';
 import { ConfidenceButtons } from './ConfidenceButtons';
+import { ChatTranscript, parseThinkingBlocks, renderMarkdown } from './ChatTranscript';
+import { StudentJoin } from './StudentJoin';
+import {
+  loadIdentity, saveBlockly, postEvent, postIntervention, ping,
+  type StudentIdentity,
+} from './api';
 
 interface ToolCallDef {
   id: string;
@@ -45,17 +49,9 @@ const ENV_API_KEY = import.meta.env.VITE_API_KEY ?? '';
 
 const MODELS: string[] = [...new Set([DEFAULT_MODEL, 'gpt-4', 'gpt-4o'])];
 
-function loadLang(): string {
-  try {
-    const stored = localStorage.getItem('chat-scratchy-lang');
-    if (stored === 'zh' || stored === 'en') return stored;
-  } catch {}
-  return 'zh';
-}
-
 function loadSettings(): Settings {
   const defaultModel: string = DEFAULT_MODEL;
-  const defaultPrompt = loadLang() === 'en' ? EN_SYSTEM_PROMPT : ZH_SYSTEM_PROMPT;
+  const defaultPrompt = EN_SYSTEM_PROMPT;
   try {
     const stored = localStorage.getItem('chat-settings');
     if (stored) {
@@ -77,85 +73,52 @@ function saveSettings(settings: Settings): void {
   } catch { /* ignore */ }
 }
 
-async function fetchSessions(): Promise<Session[]> {
-  const res = await fetch(`${API_BASE}/sessions`);
+// Session list for the current student.
+async function fetchSessions(studentId: string | null): Promise<Session[]> {
+  const qs = studentId ? `?studentId=${encodeURIComponent(studentId)}` : '';
+  const res = await fetch(`${API_BASE}/sessions${qs}`, { credentials: 'include' });
   return res.json() as Promise<Session[]>;
 }
 
-async function createSession(): Promise<Session> {
-  const res = await fetch(`${API_BASE}/sessions`, { method: 'POST' });
+async function createSession(identity: StudentIdentity | null, objectiveId: string | undefined, lang: string): Promise<Session> {
+  const res = await fetch(`${API_BASE}/sessions`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      studentId: identity?.studentId ?? null,
+      classId: identity?.classId ?? null,
+      objectiveId: objectiveId ?? null,
+      lang,
+    }),
+  });
   return res.json() as Promise<Session>;
 }
 
 async function fetchSession(id: string): Promise<{ messages: Message[] }> {
-  const res = await fetch(`${API_BASE}/sessions/${id}`);
+  const res = await fetch(`${API_BASE}/sessions/${id}`, { credentials: 'include' });
   return res.json() as Promise<{ messages: Message[] }>;
 }
 
 async function updateSession(id: string, messages: Message[]): Promise<void> {
   await fetch(`${API_BASE}/sessions/${id}`, {
     method: 'PUT',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages }),
   });
 }
 
 async function deleteSession(id: string): Promise<void> {
-  await fetch(`${API_BASE}/sessions/${id}`, { method: 'DELETE' });
-}
-
-interface ParsedContent {
-  thinking: string;
-  content: string;
-}
-
-type ToolChip = { icon: string; label: string | ((args: Record<string, string>) => string) } | null;
-
-const TOOL_CHIP_MAP: Record<string, ToolChip> = {
-  get_scratch_context:      null,
-  get_generated_code:       null,
-  highlight_block:          { icon: '✨', label: (a) => `highlighted ${a.blockRef}` },
-  show_block_tip:           { icon: '💬', label: (a) => `tip on ${a.blockRef}` },
-  clear_tips:               { icon: '🧹', label: 'cleared tips' },
-  zoom_to_block:            { icon: '🎯', label: (a) => `zoomed to ${a.blockRef}` },
-  zoom_to_fit:              { icon: '🎯', label: 'zoomed to fit' },
-  mark_block_correct:       { icon: '✅', label: (a) => `${a.blockRef} correct` },
-  mark_block_issue:         { icon: '⚠️', label: (a) => `${a.blockRef}: ${a.message}` },
-  highlight_toolbox_block:  { icon: '👉', label: (a) => `${a.category} → ${a.blockType}` },
-  suggest_category:         { icon: '📂', label: (a) => `opened ${a.category}` },
-  run_program:              { icon: '▶', label: 'ran program' },
-};
-
-function parseThinkingBlocks(text: string): ParsedContent {
-  const thinkRegex = /<think>([\s\S]*?)<\/think>/gi;
-  const thoughtRegex = /<thought>([\s\S]*?)<\/thought>/gi;
-  
-  let thinking = '';
-  let content = text;
-  
-  let match;
-  while ((match = thinkRegex.exec(text)) !== null) {
-    if (match[1]) {
-      thinking += match[1].trim() + '\n';
-    }
-  }
-  while ((match = thoughtRegex.exec(text)) !== null) {
-    if (match[1]) {
-      thinking += match[1].trim() + '\n';
-    }
-  }
-  
-  if (thinking) {
-    content = text.replace(thinkRegex, '').replace(thoughtRegex, '').trim();
-  }
-  
-  return { thinking: thinking.trim(), content };
+  await fetch(`${API_BASE}/sessions/${id}`, { method: 'DELETE', credentials: 'include' });
 }
 
 function App() {
+  const [identity, setIdentity] = useState<StudentIdentity | null>(loadIdentity);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isTranslating, setIsTranslating] = useState<boolean>(false);
   const [streamingContent, setStreamingContent] = useState<string>('');
   const [streamingThinking, setStreamingThinking] = useState<string>('');
   const [showSettings, setShowSettings] = useState<boolean>(false);
@@ -176,12 +139,28 @@ function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamingThinkingRef = useRef<HTMLPreElement>(null);
   const blocklyRef = useRef<BlocklyPanelHandle>(null);
+  // Synchronous mutex — flips before the first await so concurrent callers see it immediately.
+  // isLoading (React state) lags by one render cycle; this ref does not.
+  const llmBusyRef = useRef(false);
+  // Debounce timer for blockly autosave.
+  const blocklySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const tracker = useActivityTracker();
   const interventionTracker = useInterventionTracker();
 
+  const { t, lang, toggleLang } = useI18n();
+
+  const taskObjectives = [
+    { id: 'animation', label: t('objective_animation_label'), description: t('objective_animation_desc') },
+    { id: 'cat-mouse', label: t('objective_cat_mouse_label'), description: t('objective_cat_mouse_desc') },
+    { id: 'quiz', label: t('objective_quiz_label'), description: t('objective_quiz_desc') },
+    { id: 'pong', label: t('objective_pong_label'), description: t('objective_pong_desc') },
+    { id: 'falling', label: t('objective_falling_label'), description: t('objective_falling_desc') },
+  ];
+
   useEffect(() => {
     void loadSessionsList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -196,23 +175,37 @@ function App() {
     }
   }, [streamingThinking]);
 
+  // Presence heartbeat: ping the server while a session is active and the tab is visible.
+  useEffect(() => {
+    if (!currentSessionId) return;
+    const id = currentSessionId;
+    const beat = () => { if (document.visibilityState !== 'hidden') void ping(id).catch(() => {}); };
+    beat();
+    const interval = setInterval(beat, 30_000);
+    return () => clearInterval(interval);
+  }, [currentSessionId]);
+
   const loadSessionsList = async (): Promise<void> => {
     try {
-      const list = await fetchSessions();
+      const list = await fetchSessions(identity?.studentId ?? null);
       setSessions(list);
     } catch (e) {
       console.error('Failed to load sessions:', e);
     }
   };
 
+  const buildSystemContent = (): string => {
+    const objDesc = taskObjectives[selectedObjective]?.description;
+    return objDesc ? settings.systemPrompt + '\n\n' + t('objective_heading') + objDesc : settings.systemPrompt;
+  };
+
   const startNewSession = async (): Promise<string | null> => {
     try {
-      const session = await createSession();
+      const objId = taskObjectives[selectedObjective]?.id;
+      const session = await createSession(identity, objId, lang);
       setCurrentSessionId(session.id);
-      const objDesc = taskObjectives[selectedObjective]?.description;
-      const sysContent = objDesc ? settings.systemPrompt + '\n\n' + t('objective_heading') + objDesc : settings.systemPrompt;
-      setMessages([{ role: 'system', content: sysContent }]);
-      setSessions([session, ...sessions]);
+      setMessages([{ role: 'system', content: buildSystemContent() }]);
+      setSessions([{ id: session.id, title: 'New Chat', updatedAt: new Date().toISOString() }, ...sessions]);
       return session.id;
     } catch (e) {
       console.error('Failed to create session:', e);
@@ -223,12 +216,9 @@ function App() {
   const loadSession = async (id: string): Promise<void> => {
     try {
       const session = await fetchSession(id);
-      const loadedMessages: Message[] = session.messages.length > 0 
-        ? session.messages 
-        : [{ role: 'system', content: (() => {
-            const objDesc = taskObjectives[selectedObjective]?.description;
-            return objDesc ? settings.systemPrompt + '\n\n' + t('objective_heading') + objDesc : settings.systemPrompt;
-          })() }];
+      const loadedMessages: Message[] = session.messages.length > 0
+        ? session.messages
+        : [{ role: 'system', content: buildSystemContent() }];
       setMessages(loadedMessages);
       setCurrentSessionId(id);
       setShowSessions(false);
@@ -338,8 +328,8 @@ function App() {
       case 'zoom_to_fit': ref.zoomToFit(); return 'Zoomed to fit';
       case 'mark_block_correct': ref.showBlockTip(args.blockRef, '✅ Correct!'); return 'Marked correct';
       case 'mark_block_issue': ref.showBlockTip(args.blockRef, `⚠️ ${args.message}`); return 'Marked issue';
-      case 'highlight_toolbox_block': console.log('[tool] highlight_toolbox_block args:', args); ref.highlightToolboxBlock(args.category, args.blockType); return `Highlighted ${args.blockType} in ${args.category} toolbox`;
-      case 'suggest_category': console.log('[tool] suggest_category args:', args); ref.suggestCategory(args.category); return `Category ${args.category} suggested`;
+      case 'highlight_toolbox_block': ref.highlightToolboxBlock(args.category, args.blockType); return `Highlighted ${args.blockType} in ${args.category} toolbox`;
+      case 'suggest_category': ref.suggestCategory(args.category); return `Category ${args.category} suggested`;
       case 'run_program': ref.runProgram(); return 'Program running';
       default: return `Unknown tool: ${tc.function.name}`;
     }
@@ -446,9 +436,41 @@ function App() {
     return { content: accumulatedContent, thinking: accumulatedThinking, toolCalls };
   };
 
+  const translateToZh = async (text: string): Promise<string> => {
+    try {
+      const res = await fetch(settings.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model: settings.model,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a translator. Translate the following text to Traditional Chinese (繁體中文).\nRules:\n- Preserve all markdown formatting (bold, italics, lists, headings)\n- Preserve backtick code spans exactly as-is (e.g. `move (10) steps`, `scratch_movesteps`)\n- Preserve block reference tags exactly (e.g. #ref1, #ref2)\n- Return ONLY the translated text, no preamble or explanation',
+            },
+            { role: 'user', content: text },
+          ],
+          stream: false,
+          max_tokens: 1024,
+        }),
+      });
+      if (!res.ok) { return text; }
+      const data = await res.json() as { choices?: { message?: { content?: string } }[] };
+      return data.choices?.[0]?.message?.content?.trim() || text;
+    } catch (e) {
+      console.error('[translateToZh] exception:', e);
+      return text;
+    }
+  };
+
   const handleSend = async (text?: string): Promise<void> => {
     const trimmedInput = (text ?? input).trim();
-    if (trimmedInput === '' || isLoading) return;
+    if (trimmedInput === '' || llmBusyRef.current) return;
+    llmBusyRef.current = true;
+    try {
 
     let activeSessionId = currentSessionId;
     if (activeSessionId === null) {
@@ -460,8 +482,7 @@ function App() {
     tracker.recordStudentMessage(trimmedInput);
 
     const userMessage: Message = { role: 'user', content: trimmedInput };
-    const objDesc = taskObjectives[selectedObjective]?.description;
-    const sysContent = objDesc ? settings.systemPrompt + '\n\n' + t('objective_heading') + objDesc : settings.systemPrompt;
+    const sysContent = buildSystemContent();
     const systemMessage: Message = { role: 'system', content: sysContent };
     const existingMessagesWithoutSystem = messages.filter(m => m.role !== 'system');
 
@@ -499,6 +520,10 @@ function App() {
 
     let finalContent = '';
     let finalThinking = '';
+    // Content/thinking saved from a response that also carried tool_calls.
+    // Used as the final response so we don't need an extra LLM round-trip.
+    let savedContent = '';
+    let savedThinking = '';
     let error: string | undefined;
     let retries = 0;
 
@@ -515,9 +540,12 @@ function App() {
       }
 
       if (result.toolCalls.length > 0) {
+        // Save any text that came alongside the tool calls — it's the real response.
+        const trimmedContent = result.content.trim();
+        if (trimmedContent.length > 3) { savedContent = trimmedContent; savedThinking = result.thinking; }
         const assistantMsg: Message = {
           role: 'assistant',
-          content: result.content || null,
+          content: null,
           tool_calls: result.toolCalls.map(tc => ({
             id: tc.id,
             type: 'function',
@@ -530,18 +558,41 @@ function App() {
           const toolResult = await executeToolCall(tc);
           currentMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolResult });
         }
+        // If the model already gave us the response text, skip the follow-up LLM call.
+        if (savedContent) {
+          finalContent = savedContent;
+          finalThinking = savedThinking;
+          break;
+        }
         continue;
       }
 
-      finalContent = result.content;
-      finalThinking = result.thinking;
+      finalContent = result.content || savedContent;
+      finalThinking = result.thinking || savedThinking;
       break;
     }
 
     if (error) {
+      setIsLoading(false);
+      setStreamingContent('');
+      setStreamingThinking('');
       setMessages([...currentMessages, { role: 'assistant', content: `${t('Error')}: ${error}` }]);
-    } else {
-      const finalAssistantContent = finalContent + (finalThinking ? `\n<think>\n${finalThinking}\n</think>` : '');
+    } else if (finalContent || finalThinking) {
+      let displayContent = finalContent;
+      const alreadyChinese = /[一-鿿]/.test(finalContent);
+      if (lang === 'zh' && finalContent && !alreadyChinese) {
+        setStreamingContent('');
+        setIsTranslating(true);
+        displayContent = await translateToZh(finalContent);
+        setIsTranslating(false);
+      }
+
+      // Clear loading state BEFORE setting messages — prevents double-render
+      setIsLoading(false);
+      setStreamingContent('');
+      setStreamingThinking('');
+
+      const finalAssistantContent = displayContent + (finalThinking ? `\n<think>\n${finalThinking}\n</think>` : '');
       const assistantMessage: Message = { role: 'assistant', content: finalAssistantContent };
       const allMessages = [...currentMessages, assistantMessage];
       setMessages(allMessages);
@@ -550,18 +601,36 @@ function App() {
         await updateSession(activeSessionId, allMessages);
         void loadSessionsList();
       }
+    } else {
+      // Model returned nothing (tool-only loop with no text)
+      setIsLoading(false);
+      setStreamingContent('');
+      setStreamingThinking('');
+      setMessages(currentMessages);
     }
 
-    setIsLoading(false);
-    setStreamingContent('');
-    setStreamingThinking('');
+    } finally {
+      llmBusyRef.current = false;
+    }
   };
 
   const handleBlockChange = useCallback((blocks: BlockData[]) => {
     setCurrentBlocks(blocks);
     tracker.recordBlockChange(blocks);
     interventionTracker.resolveWithBlockChange(blocks);
-  }, [tracker, interventionTracker]);
+    // Debounced autosave of the full workspace state to the server.
+    if (blocklySaveTimer.current) clearTimeout(blocklySaveTimer.current);
+    blocklySaveTimer.current = setTimeout(() => {
+      const ref = blocklyRef.current;
+      const sid = currentSessionId;
+      if (!ref || !sid) return;
+      void saveBlockly(sid, {
+        workspaceJson: ref.getWorkspaceState(),
+        generatedCode: ref.getGeneratedCode(),
+        blockSummary: ref.getContext(),
+      }).catch(() => {});
+    }, 2000);
+  }, [tracker, interventionTracker, currentSessionId]);
 
   const handleProactiveIntervention = useCallback(async (decision: {
     action: string;
@@ -571,39 +640,53 @@ function App() {
     suggestBreak: boolean;
     toolCalls: unknown[];
   }) => {
+    // Open the floating chat so the student sees the intervention
+    setChatMinimized(false);
+
     const injectedMessage: Message = {
       role: 'assistant',
       content: decision.message,
     };
-    
+
+    // Persist the intervention server-side (fire and forget).
+    if (currentSessionId) {
+      void postIntervention(currentSessionId, {
+        patternId: decision.patternId,
+        message: decision.message,
+        outcome: 'pending',
+      }).catch(() => {});
+    }
+
     const tcs = (decision.toolCalls || []) as { id?: string; name: string; arguments: any }[];
     if (tcs.length > 0) {
       setPartnerStatus('intervening');
-      
+
       const tcId = `call_${Date.now()}`;
       const toolCallDefs = tcs.map((tc, i) => ({
         id: tc.id || `${tcId}_${i}`,
         type: 'function' as const,
         function: { name: tc.name, arguments: JSON.stringify(tc.arguments || {}) },
       }));
-      
+
       injectedMessage.tool_calls = toolCallDefs;
       setMessages(prev => [...prev, injectedMessage]);
-      
+
       for (const tcDef of toolCallDefs) {
         const result = await executeToolCall(tcDef);
         const toolMsg: Message = { role: 'tool', tool_call_id: tcDef.id, content: result };
         setMessages(prev => [...prev, toolMsg]);
       }
-      
+
       setTimeout(() => setPartnerStatus('idle'), 3000);
     } else {
       setMessages(prev => [...prev, injectedMessage]);
     }
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSessionId]);
 
   const handleAskAboutBlock = useCallback((blockRef: string, description: string) => {
     void handleSend(`Can you explain what this block does? Block: ${description} (ref: ${blockRef})`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleThinking = (idx: number): void => {
@@ -637,25 +720,19 @@ function App() {
     saveSettings(newSettings);
   };
 
-  const renderContent = (content: string): string => {
-    return marked.parse(content, { async: false }) as string;
-  };
-
-  const { t, lang, toggleLang } = useI18n();
-
   // Use a ref so the effect only re-runs when lang changes, not when updateSetting changes
   const updateSettingRef = useRef(updateSetting);
   updateSettingRef.current = updateSetting;
   useEffect(() => {
-    const newPrompt = lang === 'en' ? EN_SYSTEM_PROMPT : ZH_SYSTEM_PROMPT;
-    if (settings.systemPrompt !== newPrompt) {
-      updateSettingRef.current('systemPrompt', newPrompt);
+    // Backend always uses the English system prompt — reliable tool call args regardless of display language
+    if (settings.systemPrompt !== EN_SYSTEM_PROMPT) {
+      updateSettingRef.current('systemPrompt', EN_SYSTEM_PROMPT);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lang]);
 
   const { triggerWatchdog } = useProactiveAgent(
-    { tracker, interventionTracker, onIntervene: handleProactiveIntervention, blocklyRef },
+    { tracker, interventionTracker, onIntervene: handleProactiveIntervention, blocklyRef, llmBusyRef },
     {
       chatHistory: messages,
       currentBlocks,
@@ -667,34 +744,6 @@ function App() {
   );
 
   const isEmpty = messages.length <= 1;
-
-  const taskObjectives = [
-    {
-      id: 'animation',
-      label: t('objective_animation_label'),
-      description: t('objective_animation_desc'),
-    },
-    {
-      id: 'cat-mouse',
-      label: t('objective_cat_mouse_label'),
-      description: t('objective_cat_mouse_desc'),
-    },
-    {
-      id: 'quiz',
-      label: t('objective_quiz_label'),
-      description: t('objective_quiz_desc'),
-    },
-    {
-      id: 'pong',
-      label: t('objective_pong_label'),
-      description: t('objective_pong_desc'),
-    },
-    {
-      id: 'falling',
-      label: t('objective_falling_label'),
-      description: t('objective_falling_desc'),
-    },
-  ];
 
   const renderChatTab = (tab: string, label: string) => (
     <button
@@ -724,65 +773,17 @@ function App() {
                 <p>{t('How can I help you today?')}</p>
               </div>
             )}
-            {(() => {
-              // Build tool_call_id → { name, args } index from all assistant messages
-              const toolCallIndex = new Map<string, { name: string; args: Record<string, string> }>();
-              for (const m of messages) {
-                if (m.tool_calls) {
-                  for (const tc of m.tool_calls) {
-                    let args: Record<string, string> = {};
-                    try { args = JSON.parse(tc.function.arguments || '{}'); } catch { /* ignore */ }
-                    toolCallIndex.set(tc.id, { name: tc.function.name, args });
-                  }
-                }
-              }
-              return messages.filter(m => m.role !== 'system').map((msg, idx): JSX.Element | null => {
-              // Assistant messages that only carry tool_calls with no text are invisible in the chat
-              if (msg.role === 'assistant' && !msg.content && msg.tool_calls?.length) return null;
-
-              // Tool result messages → compact action chips via TOOL_CHIP_MAP
-              if (msg.role === 'tool') {
-                const call = msg.tool_call_id ? toolCallIndex.get(msg.tool_call_id) : undefined;
-                if (!call) return null;
-                const chipDef = TOOL_CHIP_MAP[call.name];
-                if (!chipDef) return null;
-                const label = typeof chipDef.label === 'function' ? chipDef.label(call.args) : chipDef.label;
-                return (
-                  <div key={idx} className="tool-action-chip">
-                    <span className="tool-action-icon">{chipDef.icon}</span>
-                    <span className="tool-action-label">{label}</span>
-                  </div>
-                );
-              }
-
-              const parsed = parseThinkingBlocks(msg.content ?? '');
-              return (
-                <div key={idx} className={`message ${msg.role}`}>
-                  <div className="avatar">{msg.role === 'user' ? t('You') : 'AI'}</div>
-                  <div className="content">
-                    {parsed.thinking && (
-                      <div className="thinking">
-                        <div className="thinking-header" onClick={() => toggleThinking(idx)}>
-                          {expandedThinking.has(idx) ? '▼' : '▶'} {t('Thinking')}
-                        </div>
-                        {expandedThinking.has(idx) && (
-                          <pre className="thinking-content">{parsed.thinking}</pre>
-                        )}
-                      </div>
-                    )}
-                    {parsed.content && (
-                      <div dangerouslySetInnerHTML={{ __html: renderContent(parsed.content) }} />
-                    )}
-                  </div>
-                </div>
-              );
-            });
-            })()}
-            {(isLoading || streamingContent) && (
+            <ChatTranscript
+              messages={messages}
+              t={t}
+              expandedThinking={expandedThinking}
+              onToggleThinking={toggleThinking}
+            />
+            {(isLoading || streamingContent || isTranslating) && (
               <div className="message bot">
                 <div className="avatar">AI</div>
                 <div className="content">
-                  {streamingThinking && (
+                  {streamingThinking && !isTranslating && (
                     <div className="thinking">
                       <div className="thinking-header" onClick={() => setStreamingThinkingExpanded(!streamingThinkingExpanded)}>
                         {streamingThinkingExpanded ? '▼' : '▶'} {t('Thinking...')}
@@ -792,8 +793,10 @@ function App() {
                       )}
                     </div>
                   )}
-                  {streamingContent ? (
-                    <div dangerouslySetInnerHTML={{ __html: renderContent(streamingContent) }} />
+                  {isTranslating ? (
+                    <div className="translating-indicator">翻譯中…</div>
+                  ) : streamingContent ? (
+                    <div dangerouslySetInnerHTML={{ __html: renderMarkdown(parseThinkingBlocks(streamingContent).content) }} />
                   ) : (
                     <div className="loading">
                       <span></span>
@@ -811,6 +814,7 @@ function App() {
             onSignal={(signal) => {
               setConfidenceSignal(signal);
               tracker.recordConfidenceSignal(signal);
+              if (currentSessionId) void postEvent(currentSessionId, 'confidence', { signal }).catch(() => {});
               if (signal === 'confused') {
                 void handleSend(t('confused_auto_message'));
               }
@@ -843,6 +847,11 @@ function App() {
       )}
     </>
   );
+
+  // Gate: student must join a class before using the app.
+  if (!identity) {
+    return <StudentJoin onJoined={setIdentity} />;
+  }
 
   return (
     <div className="app">
@@ -927,7 +936,7 @@ function App() {
 
       {mode === 'task' ? (
         <div className="scratch-full">
-          <BlocklyPanel ref={blocklyRef} objectiveDescription={taskObjectives[selectedObjective]?.description ?? ''} objectives={taskObjectives} selectedObjective={selectedObjective} onSelectObjective={setSelectedObjective} onBlockChange={handleBlockChange} onAskAboutBlock={handleAskAboutBlock} partnerStatus={partnerStatus} />
+          <BlocklyPanel ref={blocklyRef} lang={lang} objectiveDescription={taskObjectives[selectedObjective]?.description ?? ''} objectives={taskObjectives} selectedObjective={selectedObjective} onSelectObjective={setSelectedObjective} onBlockChange={handleBlockChange} onAskAboutBlock={handleAskAboutBlock} partnerStatus={partnerStatus} />
           <div className={`floating-chat ${chatMinimized ? 'minimized' : ''}`}>
             <div className="floating-chat-header" onClick={() => setChatMinimized(!chatMinimized)}>
               <span>{t('Chats')}</span>

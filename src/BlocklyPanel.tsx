@@ -1,9 +1,12 @@
 import {
   useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle,
 } from 'react';
+import { createPortal } from 'react-dom';
 import * as Blockly from 'blockly';
 import 'blockly/blocks';
 import { javascriptGenerator, Order } from 'blockly/javascript';
+import * as ZhHant from 'blockly/msg/zh-hant';
+import * as En from 'blockly/msg/en';
 import { extractAllBlocks } from './scratchPatterns';
 import type { BlockData } from './scratchPatterns';
 import { EXAMPLE_CHAINS } from './exampleChains';
@@ -54,6 +57,8 @@ export interface BlocklyPanelHandle {
   getBlockSnapshot(): BlockData[];
   getGeneratedCode(): string;
   getOutputLogs(): string[];
+  getWorkspaceState(): object;     // Blockly.serialization.workspaces.save()
+  loadWorkspaceState(state: object): void;
 
   // Pointing
   highlightBlock(ref: string): void;
@@ -105,56 +110,170 @@ function resolveRef(refId: string, map: Map<string, string>): string | undefined
   return [...map.entries()].find(([, v]) => v === refId)?.[0];
 }
 
-// ── Custom block definitions ────────────────────────────────────────
+// ── Block locale ─────────────────────────────────────────────────────
 
-function defineBlock(type: string, def: Record<string, unknown>) {
-  Blockly.Blocks[type] = { init() { this.jsonInit(def); } };
+// Read at block init() time so serialize→setLang→deserialize refreshes labels.
+let _blockLang = 'en';
+
+type BlockMsg = { en: string; zh: string };
+type KeyOption = [string, string]; // [displayLabel, value]
+
+function msg(m: BlockMsg): string { return _blockLang === 'zh' ? m.zh : m.en; }
+function keyOpts(includeAny = false): KeyOption[] {
+  const isZh = _blockLang === 'zh';
+  const opts: KeyOption[] = [
+    [isZh ? '空白鍵' : 'space', 'space'],
+    [isZh ? '上箭頭' : 'up arrow', 'ArrowUp'],
+    [isZh ? '下箭頭' : 'down arrow', 'ArrowDown'],
+    [isZh ? '左箭頭' : 'left arrow', 'ArrowLeft'],
+    [isZh ? '右箭頭' : 'right arrow', 'ArrowRight'],
+    ['a', 'a'], ['b', 'b'],
+  ];
+  if (includeAny) opts.push([isZh ? '任意鍵' : 'any', 'any']);
+  return opts;
 }
 
-defineBlock('scratch_movesteps', { message0: 'move %1 steps', args0: [{ type: 'input_value', name: 'STEPS', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
-defineBlock('scratch_turnright', { message0: 'turn right %1 degrees', args0: [{ type: 'input_value', name: 'DEGREES', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
-defineBlock('scratch_turnleft', { message0: 'turn left %1 degrees', args0: [{ type: 'input_value', name: 'DEGREES', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
-defineBlock('scratch_goto', { message0: 'go to x: %1 y: %2', args0: [{ type: 'input_value', name: 'X', check: 'Number' }, { type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
-defineBlock('scratch_glide', { message0: 'glide %1 secs to x: %2 y: %3', args0: [{ type: 'input_value', name: 'SECS', check: 'Number' }, { type: 'input_value', name: 'X', check: 'Number' }, { type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
-defineBlock('scratch_changex', { message0: 'change x by %1', args0: [{ type: 'input_value', name: 'DX', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
-defineBlock('scratch_setx', { message0: 'set x to %1', args0: [{ type: 'input_value', name: 'X', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
-defineBlock('scratch_changey', { message0: 'change y by %1', args0: [{ type: 'input_value', name: 'DY', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
-defineBlock('scratch_sety', { message0: 'set y to %1', args0: [{ type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
-defineBlock('scratch_ifonedgebounce', { message0: 'if on edge, bounce', previousStatement: null, nextStatement: null, colour: 120 });
-defineBlock('scratch_xposition', { message0: 'x position', output: 'Number', colour: 120 });
-defineBlock('scratch_yposition', { message0: 'y position', output: 'Number', colour: 120 });
-defineBlock('scratch_direction', { message0: 'direction', output: 'Number', colour: 120 });
-defineBlock('scratch_says', { message0: 'say %1', args0: [{ type: 'input_value', name: 'TEXT' }], previousStatement: null, nextStatement: null, colour: 200 });
-defineBlock('scratch_sayseconds', { message0: 'say %1 for %2 seconds', args0: [{ type: 'input_value', name: 'TEXT' }, { type: 'input_value', name: 'SECS', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
-defineBlock('scratch_show', { message0: 'show', previousStatement: null, nextStatement: null, colour: 200 });
-defineBlock('scratch_hide', { message0: 'hide', previousStatement: null, nextStatement: null, colour: 200 });
-defineBlock('scratch_changesize', { message0: 'change size by %1', args0: [{ type: 'input_value', name: 'DELTA', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
-defineBlock('scratch_setsize', { message0: 'set size to %1 %', args0: [{ type: 'input_value', name: 'SIZE', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
-defineBlock('scratch_size', { message0: 'size', output: 'Number', colour: 200 });
-defineBlock('scratch_touchingmouse', { message0: 'touching mouse-pointer?', output: 'Boolean', colour: 60 });
-defineBlock('scratch_touchingedge', { message0: 'touching edge?', output: 'Boolean', colour: 60 });
-defineBlock('scratch_distancetomouse', { message0: 'distance to mouse-pointer', output: 'Number', colour: 60 });
-defineBlock('scratch_mousex', { message0: 'mouse x', output: 'Number', colour: 60 });
-defineBlock('scratch_mousey', { message0: 'mouse y', output: 'Number', colour: 60 });
-defineBlock('scratch_keypressed', { message0: 'key %1 pressed?', args0: [{ type: 'field_dropdown', name: 'KEY', options: [['space', 'space'], ['up arrow', 'ArrowUp'], ['down arrow', 'ArrowDown'], ['left arrow', 'ArrowLeft'], ['right arrow', 'ArrowRight'], ['a', 'a'], ['b', 'b']] }], output: 'Boolean', colour: 60 });
-defineBlock('event_whenflagclicked', { message0: 'when flag clicked', nextStatement: null, colour: 330 });
-defineBlock('event_whenkeypressed', { message0: 'when %1 key pressed', args0: [{ type: 'field_dropdown', name: 'KEY', options: [['space', 'space'], ['up arrow', 'ArrowUp'], ['down arrow', 'ArrowDown'], ['left arrow', 'ArrowLeft'], ['right arrow', 'ArrowRight'], ['a', 'a'], ['b', 'b'], ['any', 'any']] }], nextStatement: null, colour: 330 });
-defineBlock('event_whenthisspriteclicked', { message0: 'when this sprite clicked', nextStatement: null, colour: 330 });
-defineBlock('scratch_broadcast', { message0: 'broadcast %1', args0: [{ type: 'input_value', name: 'MESSAGE', check: 'String' }], previousStatement: null, nextStatement: null, colour: 330 });
-defineBlock('scratch_whenireceive', { message0: 'when I receive %1', args0: [{ type: 'input_value', name: 'MESSAGE', check: 'String' }], nextStatement: null, colour: 330 });
-defineBlock('scratch_playsound', { message0: 'play sound %1', args0: [{ type: 'input_value', name: 'SOUND', check: 'String' }], previousStatement: null, nextStatement: null, colour: 200 });
-defineBlock('scratch_switchcostume', { message0: 'switch costume to %1', args0: [{ type: 'input_value', name: 'COSTUME', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
-defineBlock('scratch_nextcostume', { message0: 'next costume', previousStatement: null, nextStatement: null, colour: 200 });
-defineBlock('scratch_costumenumber', { message0: 'costume #', output: 'Number', colour: 200 });
-defineBlock('scratch_askandwait', { message0: 'ask %1 and wait', args0: [{ type: 'input_value', name: 'QUESTION', check: 'String' }], previousStatement: null, nextStatement: null, colour: 60 });
-defineBlock('scratch_answer', { message0: 'answer', output: 'String', colour: 60 });
-defineBlock('scratch_createclone', { message0: 'create clone of myself', previousStatement: null, nextStatement: null, colour: 330 });
-defineBlock('scratch_whenclonestart', { message0: 'when I start as a clone', nextStatement: null, colour: 330 });
-defineBlock('scratch_deleteclone', { message0: 'delete this clone', previousStatement: null, nextStatement: null, colour: 330 });
+// ── Custom block definitions ────────────────────────────────────────
 
+function defineBlock(type: string, enDef: Record<string, unknown>, zhDef?: Record<string, unknown>) {
+  const zh = zhDef ?? enDef;
+  Blockly.Blocks[type] = { init() { this.jsonInit(_blockLang === 'zh' ? zh : enDef); } };
+}
+
+// Motion
+defineBlock('scratch_movesteps',
+  { message0: 'move %1 steps',            args0: [{ type: 'input_value', name: 'STEPS',   check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 },
+  { message0: '移動 %1 步',               args0: [{ type: 'input_value', name: 'STEPS',   check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_turnright',
+  { message0: 'turn right %1 degrees',    args0: [{ type: 'input_value', name: 'DEGREES', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 },
+  { message0: '右轉 %1 度',               args0: [{ type: 'input_value', name: 'DEGREES', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_turnleft',
+  { message0: 'turn left %1 degrees',     args0: [{ type: 'input_value', name: 'DEGREES', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 },
+  { message0: '左轉 %1 度',               args0: [{ type: 'input_value', name: 'DEGREES', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_goto',
+  { message0: 'go to x: %1 y: %2',       args0: [{ type: 'input_value', name: 'X', check: 'Number' }, { type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 },
+  { message0: '移到 x: %1 y: %2',        args0: [{ type: 'input_value', name: 'X', check: 'Number' }, { type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_glide',
+  { message0: 'glide %1 secs to x: %2 y: %3', args0: [{ type: 'input_value', name: 'SECS', check: 'Number' }, { type: 'input_value', name: 'X', check: 'Number' }, { type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 },
+  { message0: '在 %1 秒內滑行到 x: %2 y: %3', args0: [{ type: 'input_value', name: 'SECS', check: 'Number' }, { type: 'input_value', name: 'X', check: 'Number' }, { type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_changex',
+  { message0: 'change x by %1',           args0: [{ type: 'input_value', name: 'DX', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 },
+  { message0: 'x 改變 %1',               args0: [{ type: 'input_value', name: 'DX', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_setx',
+  { message0: 'set x to %1',             args0: [{ type: 'input_value', name: 'X', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 },
+  { message0: '設定 x 為 %1',            args0: [{ type: 'input_value', name: 'X', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_changey',
+  { message0: 'change y by %1',           args0: [{ type: 'input_value', name: 'DY', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 },
+  { message0: 'y 改變 %1',               args0: [{ type: 'input_value', name: 'DY', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_sety',
+  { message0: 'set y to %1',             args0: [{ type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 },
+  { message0: '設定 y 為 %1',            args0: [{ type: 'input_value', name: 'Y', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_ifonedgebounce',
+  { message0: 'if on edge, bounce',       previousStatement: null, nextStatement: null, colour: 120 },
+  { message0: '碰到邊緣就反彈',           previousStatement: null, nextStatement: null, colour: 120 });
+defineBlock('scratch_xposition',  { message0: 'x position', output: 'Number', colour: 120 }, { message0: 'x 座標', output: 'Number', colour: 120 });
+defineBlock('scratch_yposition',  { message0: 'y position', output: 'Number', colour: 120 }, { message0: 'y 座標', output: 'Number', colour: 120 });
+defineBlock('scratch_direction',  { message0: 'direction',  output: 'Number', colour: 120 }, { message0: '方向',   output: 'Number', colour: 120 });
+
+// Looks
+defineBlock('scratch_says',
+  { message0: 'say %1',                  args0: [{ type: 'input_value', name: 'TEXT' }], previousStatement: null, nextStatement: null, colour: 200 },
+  { message0: '說 %1',                   args0: [{ type: 'input_value', name: 'TEXT' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_sayseconds',
+  { message0: 'say %1 for %2 seconds',   args0: [{ type: 'input_value', name: 'TEXT' }, { type: 'input_value', name: 'SECS', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 },
+  { message0: '說 %1 %2 秒',             args0: [{ type: 'input_value', name: 'TEXT' }, { type: 'input_value', name: 'SECS', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_show',
+  { message0: 'show',  previousStatement: null, nextStatement: null, colour: 200 },
+  { message0: '顯示',  previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_hide',
+  { message0: 'hide',  previousStatement: null, nextStatement: null, colour: 200 },
+  { message0: '隱藏',  previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_changesize',
+  { message0: 'change size by %1',       args0: [{ type: 'input_value', name: 'DELTA', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 },
+  { message0: '尺寸改變 %1',             args0: [{ type: 'input_value', name: 'DELTA', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_setsize',
+  { message0: 'set size to %1 %',        args0: [{ type: 'input_value', name: 'SIZE', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 },
+  { message0: '設定尺寸為 %1 %',         args0: [{ type: 'input_value', name: 'SIZE', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_size',         { message0: 'size',     output: 'Number', colour: 200 }, { message0: '尺寸',   output: 'Number', colour: 200 });
+defineBlock('scratch_switchcostume',
+  { message0: 'switch costume to %1',    args0: [{ type: 'input_value', name: 'COSTUME', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 },
+  { message0: '切換造型到 %1',           args0: [{ type: 'input_value', name: 'COSTUME', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_nextcostume',
+  { message0: 'next costume',            previousStatement: null, nextStatement: null, colour: 200 },
+  { message0: '下一個造型',              previousStatement: null, nextStatement: null, colour: 200 });
+defineBlock('scratch_costumenumber', { message0: 'costume #', output: 'Number', colour: 200 }, { message0: '造型編號', output: 'Number', colour: 200 });
+defineBlock('scratch_playsound',
+  { message0: 'play sound %1',           args0: [{ type: 'input_value', name: 'SOUND', check: 'String' }], previousStatement: null, nextStatement: null, colour: 200 },
+  { message0: '播放音效 %1',             args0: [{ type: 'input_value', name: 'SOUND', check: 'String' }], previousStatement: null, nextStatement: null, colour: 200 });
+
+// Events
+defineBlock('event_whenflagclicked',
+  { message0: 'when flag clicked',        nextStatement: null, colour: 330 },
+  { message0: '當綠旗被點擊',             nextStatement: null, colour: 330 });
+defineBlock('event_whenthisspriteclicked',
+  { message0: 'when this sprite clicked', nextStatement: null, colour: 330 },
+  { message0: '當角色被點擊',             nextStatement: null, colour: 330 });
+defineBlock('scratch_broadcast',
+  { message0: 'broadcast %1',            args0: [{ type: 'input_value', name: 'MESSAGE', check: 'String' }], previousStatement: null, nextStatement: null, colour: 330 },
+  { message0: '廣播 %1',                  args0: [{ type: 'input_value', name: 'MESSAGE', check: 'String' }], previousStatement: null, nextStatement: null, colour: 330 });
+defineBlock('scratch_whenireceive',
+  { message0: 'when I receive %1',       args0: [{ type: 'input_value', name: 'MESSAGE', check: 'String' }], nextStatement: null, colour: 330 },
+  { message0: '當收到 %1',               args0: [{ type: 'input_value', name: 'MESSAGE', check: 'String' }], nextStatement: null, colour: 330 });
+
+// Sensing — dropdowns built at init time via keyOpts()
+Blockly.Blocks['scratch_keypressed'] = {
+  init() {
+    this.jsonInit({
+      message0: msg({ en: 'key %1 pressed?', zh: '按下 %1 鍵？' }),
+      args0: [{ type: 'field_dropdown', name: 'KEY', options: keyOpts() }],
+      output: 'Boolean', colour: 60,
+    });
+  },
+};
+Blockly.Blocks['event_whenkeypressed'] = {
+  init() {
+    this.jsonInit({
+      message0: msg({ en: 'when %1 key pressed', zh: '當 %1 鍵被按下' }),
+      args0: [{ type: 'field_dropdown', name: 'KEY', options: keyOpts(true) }],
+      nextStatement: null, colour: 330,
+    });
+  },
+};
+defineBlock('scratch_touchingmouse',
+  { message0: 'touching mouse-pointer?',    output: 'Boolean', colour: 60 },
+  { message0: '碰到滑鼠指標？',              output: 'Boolean', colour: 60 });
+defineBlock('scratch_touchingedge',
+  { message0: 'touching edge?',             output: 'Boolean', colour: 60 },
+  { message0: '碰到邊緣？',                  output: 'Boolean', colour: 60 });
+defineBlock('scratch_distancetomouse',
+  { message0: 'distance to mouse-pointer',  output: 'Number', colour: 60 },
+  { message0: '到滑鼠的距離',               output: 'Number', colour: 60 });
+defineBlock('scratch_mousex',    { message0: 'mouse x', output: 'Number', colour: 60 }, { message0: '滑鼠 x', output: 'Number', colour: 60 });
+defineBlock('scratch_mousey',    { message0: 'mouse y', output: 'Number', colour: 60 }, { message0: '滑鼠 y', output: 'Number', colour: 60 });
+defineBlock('scratch_askandwait',
+  { message0: 'ask %1 and wait',            args0: [{ type: 'input_value', name: 'QUESTION', check: 'String' }], previousStatement: null, nextStatement: null, colour: 60 },
+  { message0: '詢問 %1 並等待',             args0: [{ type: 'input_value', name: 'QUESTION', check: 'String' }], previousStatement: null, nextStatement: null, colour: 60 });
+defineBlock('scratch_answer',    { message0: 'answer', output: 'String', colour: 60 }, { message0: '回答', output: 'String', colour: 60 });
+
+// Clone
+defineBlock('scratch_createclone',
+  { message0: 'create clone of myself',    previousStatement: null, nextStatement: null, colour: 330 },
+  { message0: '建立自己的分身',             previousStatement: null, nextStatement: null, colour: 330 });
+defineBlock('scratch_whenclonestart',
+  { message0: 'when I start as a clone',   nextStatement: null, colour: 330 },
+  { message0: '當分身產生',                 nextStatement: null, colour: 330 });
+defineBlock('scratch_deleteclone',
+  { message0: 'delete this clone',         previousStatement: null, nextStatement: null, colour: 330 },
+  { message0: '刪除此分身',                 previousStatement: null, nextStatement: null, colour: 330 });
+
+// Control
 Blockly.Blocks['scratch_wait'] = {
   init() {
-    this.jsonInit({ message0: 'wait %1 seconds', args0: [{ type: 'input_value', name: 'SECONDS', check: 'Number' }], previousStatement: null, nextStatement: null, colour: 330 });
+    this.jsonInit({
+      message0: msg({ en: 'wait %1 seconds', zh: '等待 %1 秒' }),
+      args0: [{ type: 'input_value', name: 'SECONDS', check: 'Number' }],
+      previousStatement: null, nextStatement: null, colour: 330,
+    });
   },
 };
 
@@ -211,46 +330,59 @@ javascriptGenerator.forBlock['scratch_whenclonestart'] = generateChain;
 
 // ── Toolbox ─────────────────────────────────────────────────────────
 
-const TOOLBOX: Blockly.utils.toolbox.ToolboxDefinition = {
-  kind: 'categoryToolbox',
-  contents: [
-    { kind: 'category', name: 'Motion', colour: '#4C97FF', contents: [
-      { kind: 'block', type: 'scratch_movesteps' }, { kind: 'block', type: 'scratch_turnright' }, { kind: 'block', type: 'scratch_turnleft' },
-      { kind: 'block', type: 'scratch_goto' }, { kind: 'block', type: 'scratch_glide' }, { kind: 'block', type: 'scratch_changex' },
-      { kind: 'block', type: 'scratch_setx' }, { kind: 'block', type: 'scratch_changey' }, { kind: 'block', type: 'scratch_sety' },
-      { kind: 'block', type: 'scratch_ifonedgebounce' }, { kind: 'block', type: 'scratch_xposition' }, { kind: 'block', type: 'scratch_yposition' }, { kind: 'block', type: 'scratch_direction' },
-    ] },
-    { kind: 'category', name: 'Looks', colour: '#9966FF', contents: [
-      { kind: 'block', type: 'scratch_says' }, { kind: 'block', type: 'scratch_sayseconds' }, { kind: 'block', type: 'scratch_show' }, { kind: 'block', type: 'scratch_hide' },
-      { kind: 'block', type: 'scratch_changesize' }, { kind: 'block', type: 'scratch_setsize' }, { kind: 'block', type: 'scratch_size' },
-      { kind: 'block', type: 'scratch_switchcostume' }, { kind: 'block', type: 'scratch_nextcostume' }, { kind: 'block', type: 'scratch_costumenumber' },
-    ] },
-    { kind: 'category', name: 'Sound', colour: '#CF63CF', contents: [{ kind: 'block', type: 'scratch_playsound' }] },
-    { kind: 'category', name: 'Events', colour: '#FFAB00', contents: [
-      { kind: 'block', type: 'event_whenflagclicked' }, { kind: 'block', type: 'event_whenkeypressed' }, { kind: 'block', type: 'event_whenthisspriteclicked' },
-      { kind: 'block', type: 'scratch_broadcast' }, { kind: 'block', type: 'scratch_whenireceive' },
-    ] },
-    { kind: 'category', name: 'Control', colour: '#EC4899', contents: [
-      { kind: 'block', type: 'controls_if' },
-      { kind: 'block', type: 'controls_repeat_ext' }, { kind: 'block', type: 'controls_whileUntil' }, { kind: 'block', type: 'scratch_wait' },
-    ] },
-    { kind: 'category', name: 'Sensing', colour: '#4CBFE6', contents: [
-      { kind: 'block', type: 'scratch_touchingmouse' }, { kind: 'block', type: 'scratch_touchingedge' },
-      { kind: 'block', type: 'scratch_distancetomouse' }, { kind: 'block', type: 'scratch_mousex' }, { kind: 'block', type: 'scratch_mousey' },
-      { kind: 'block', type: 'scratch_keypressed' }, { kind: 'block', type: 'scratch_askandwait' }, { kind: 'block', type: 'scratch_answer' },
-    ] },
-    { kind: 'category', name: 'Logic', colour: '#F97316', contents: [
-      { kind: 'block', type: 'logic_compare' }, { kind: 'block', type: 'logic_operation' }, { kind: 'block', type: 'logic_boolean' },
-    ] },
-    { kind: 'category', name: 'Text', colour: '#10B981', contents: [
-      { kind: 'block', type: 'text' }, { kind: 'block', type: 'text_join' }, { kind: 'block', type: 'text_length' },
-    ] },
-    { kind: 'category', name: 'Math', colour: '#3B82F6', contents: [
-      { kind: 'block', type: 'math_number' }, { kind: 'block', type: 'math_arithmetic' }, { kind: 'block', type: 'math_random_int' },
-    ] },
-    { kind: 'category', name: 'Variables', colour: '#FF8C00', custom: 'VARIABLE' },
-  ],
+const ZH_CATEGORY_NAMES: Record<string, string> = {
+  Motion: '動作', Looks: '外觀', Sound: '音效', Events: '事件',
+  Control: '控制', Sensing: '偵測', Logic: '邏輯', Text: '文字',
+  Math: '數學', Variables: '變數',
 };
+
+// Returns the display name for a canonical English category in the current language.
+function catName(en: string): string {
+  return _blockLang === 'zh' ? (ZH_CATEGORY_NAMES[en] ?? en) : en;
+}
+
+function getToolbox(): Blockly.utils.toolbox.ToolboxDefinition {
+  return {
+    kind: 'categoryToolbox',
+    contents: [
+      { kind: 'category', name: catName('Motion'), colour: '#4C97FF', contents: [
+        { kind: 'block', type: 'scratch_movesteps' }, { kind: 'block', type: 'scratch_turnright' }, { kind: 'block', type: 'scratch_turnleft' },
+        { kind: 'block', type: 'scratch_goto' }, { kind: 'block', type: 'scratch_glide' }, { kind: 'block', type: 'scratch_changex' },
+        { kind: 'block', type: 'scratch_setx' }, { kind: 'block', type: 'scratch_changey' }, { kind: 'block', type: 'scratch_sety' },
+        { kind: 'block', type: 'scratch_ifonedgebounce' }, { kind: 'block', type: 'scratch_xposition' }, { kind: 'block', type: 'scratch_yposition' }, { kind: 'block', type: 'scratch_direction' },
+      ] },
+      { kind: 'category', name: catName('Looks'), colour: '#9966FF', contents: [
+        { kind: 'block', type: 'scratch_says' }, { kind: 'block', type: 'scratch_sayseconds' }, { kind: 'block', type: 'scratch_show' }, { kind: 'block', type: 'scratch_hide' },
+        { kind: 'block', type: 'scratch_changesize' }, { kind: 'block', type: 'scratch_setsize' }, { kind: 'block', type: 'scratch_size' },
+        { kind: 'block', type: 'scratch_switchcostume' }, { kind: 'block', type: 'scratch_nextcostume' }, { kind: 'block', type: 'scratch_costumenumber' },
+      ] },
+      { kind: 'category', name: catName('Sound'), colour: '#CF63CF', contents: [{ kind: 'block', type: 'scratch_playsound' }] },
+      { kind: 'category', name: catName('Events'), colour: '#FFAB00', contents: [
+        { kind: 'block', type: 'event_whenflagclicked' }, { kind: 'block', type: 'event_whenkeypressed' }, { kind: 'block', type: 'event_whenthisspriteclicked' },
+        { kind: 'block', type: 'scratch_broadcast' }, { kind: 'block', type: 'scratch_whenireceive' },
+      ] },
+      { kind: 'category', name: catName('Control'), colour: '#EC4899', contents: [
+        { kind: 'block', type: 'controls_if' },
+        { kind: 'block', type: 'controls_repeat_ext' }, { kind: 'block', type: 'controls_whileUntil' }, { kind: 'block', type: 'scratch_wait' },
+      ] },
+      { kind: 'category', name: catName('Sensing'), colour: '#4CBFE6', contents: [
+        { kind: 'block', type: 'scratch_touchingmouse' }, { kind: 'block', type: 'scratch_touchingedge' },
+        { kind: 'block', type: 'scratch_distancetomouse' }, { kind: 'block', type: 'scratch_mousex' }, { kind: 'block', type: 'scratch_mousey' },
+        { kind: 'block', type: 'scratch_keypressed' }, { kind: 'block', type: 'scratch_askandwait' }, { kind: 'block', type: 'scratch_answer' },
+      ] },
+      { kind: 'category', name: catName('Logic'), colour: '#F97316', contents: [
+        { kind: 'block', type: 'logic_compare' }, { kind: 'block', type: 'logic_operation' }, { kind: 'block', type: 'logic_boolean' },
+      ] },
+      { kind: 'category', name: catName('Text'), colour: '#10B981', contents: [
+        { kind: 'block', type: 'text' }, { kind: 'block', type: 'text_join' }, { kind: 'block', type: 'text_length' },
+      ] },
+      { kind: 'category', name: catName('Math'), colour: '#3B82F6', contents: [
+        { kind: 'block', type: 'math_number' }, { kind: 'block', type: 'math_arithmetic' }, { kind: 'block', type: 'math_random_int' },
+      ] },
+      { kind: 'category', name: catName('Variables'), colour: '#FF8C00', custom: 'VARIABLE' },
+    ],
+  };
+}
 
 // ── Canvas helpers ──────────────────────────────────────────────────
 
@@ -341,6 +473,7 @@ function normalizeCategory(raw: string): string {
 // ── Component ───────────────────────────────────────────────────────
 
 export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
+  lang?: string;
   objectiveDescription?: string;
   objectives?: { id: string; label: string }[];
   selectedObjective?: number;
@@ -348,9 +481,11 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
   onBlockChange?: (blocks: BlockData[]) => void;
   onAskAboutBlock?: (blockRef: string, description: string) => void;
   partnerStatus?: 'idle' | 'analyzing' | 'intervening';
+  readOnly?: boolean;
 }>(function BlocklyPanel({
+  lang,
   objectiveDescription, objectives, selectedObjective, onSelectObjective,
-  onBlockChange, onAskAboutBlock, partnerStatus = 'idle',
+  onBlockChange, onAskAboutBlock, partnerStatus = 'idle', readOnly = false,
 }, ref) {
   const [output, setOutput] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
@@ -432,6 +567,24 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
   }, []);
 
+  // ── Locale switching ─────────────────────────────────────────────
+  // This effect intentionally runs BEFORE the Blockly init effect so that
+  // _blockLang is set correctly when the workspace is first created.
+  useEffect(() => {
+    _blockLang = lang === 'zh' ? 'zh' : 'en';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Blockly.setLocale(lang === 'zh' ? ZhHant as any : En as any);
+    const ws = workspace.current;
+    if (!ws) return; // First mount: Blockly init hasn't run yet; _blockLang is ready for init()
+    // Update category labels in the toolbox panel
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (ws as any).updateToolbox(getToolbox());
+    // Serialize → clear → deserialize forces every block init() to re-run with the new lang
+    const state = Blockly.serialization.workspaces.save(ws);
+    ws.clear();
+    Blockly.serialization.workspaces.load(state, ws);
+  }, [lang]);
+
   // ── Blockly init ─────────────────────────────────────────────────
 
   useEffect(() => {
@@ -439,11 +592,11 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
     if (!container) return;
 
     const ws = Blockly.inject(container, {
-      toolbox: TOOLBOX,
+      // Read-only mode (teacher viewer): hide toolbox/trash, disable editing.
+      ...(readOnly ? { readOnly: true } : { toolbox: getToolbox(), trashcan: true }),
       grid: { spacing: 20, length: 3, colour: '#E8DDD0', snap: true },
       move: { scrollbars: true, drag: true, wheel: true },
       zoom: { controls: true, wheel: true, startScale: 0.85 },
-      trashcan: true,
     });
     workspace.current = ws;
 
@@ -474,6 +627,8 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
     handleChange();
 
     return () => { ws.removeChangeListener(handleChange); ws.dispose(); workspace.current = null; };
+  // Mount-only: readOnly is fixed per panel instance.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Imperative handle ────────────────────────────────────────────
@@ -522,6 +677,21 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
       return javascriptGenerator.workspaceToCode(ws);
     },
     getOutputLogs() { return [...outputRef.current]; },
+    getWorkspaceState() {
+      const ws = workspace.current;
+      if (!ws) return {};
+      return Blockly.serialization.workspaces.save(ws);
+    },
+    loadWorkspaceState(state: object) {
+      const ws = workspace.current;
+      if (!ws) return;
+      try {
+        ws.clear();
+        Blockly.serialization.workspaces.load(state ?? {}, ws);
+      } catch (e) {
+        console.error('[loadWorkspaceState] failed:', e);
+      }
+    },
 
     // ── Pointing ───────────────────────────────────────────────────
     highlightBlock(refId: string) {
@@ -559,9 +729,10 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
       const toolbox = ws.getToolbox() as any;
       if (!toolbox) { console.warn('[suggestCategory] no toolbox'); return; }
       const items: any[] = toolbox.getToolboxItems?.() ?? [];
-      const normalized = normalizeCategory(category);
-      const item = items.find((it: any) => it.getName?.() === normalized);
-      console.log('[suggestCategory]', category, '→', normalized, '→ found:', !!item);
+      const normalized = normalizeCategory(category);        // always English
+      const displayName = catName(normalized);               // English or Chinese per current lang
+      const item = items.find((it: any) => it.getName?.() === displayName);
+      console.log('[suggestCategory]', category, '→', normalized, '→', displayName, '→ found:', !!item);
       if (item && toolbox.getSelectedItem?.() !== item) toolbox.setSelectedItem(item);
     },
     highlightToolboxBlock(category: string, blockType: string) {
@@ -572,15 +743,16 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
       const token = {};
       highlightToken.current = token;
 
-      const normalizedCategory = normalizeCategory(category);
+      const normalizedCategory = normalizeCategory(category);    // always English
+      const displayCategory = catName(normalizedCategory);        // English or Chinese per lang
       const openCategory = () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const toolbox = ws.getToolbox() as any;
         if (!toolbox) return;
         const items: any[] = toolbox.getToolboxItems?.() ?? [];
-        const item = items.find((it: any) => it.getName?.() === normalizedCategory);
+        const item = items.find((it: any) => it.getName?.() === displayCategory);
         if (item && toolbox.getSelectedItem?.() !== item) {
-          console.log('[highlightToolboxBlock] opening category', category, '→', normalizedCategory);
+          console.log('[highlightToolboxBlock] opening category', category, '→', normalizedCategory, '→', displayCategory);
           toolbox.setSelectedItem(item);
         }
       };
@@ -615,7 +787,7 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
           svgRoot.classList.add('blockly-ai-target');
           setTimeout(() => svgRoot.classList.remove('blockly-ai-target'), 6000);
         }
-        internalShowTip(targetBlock.id, '👉 Use this block');
+        internalShowTip(targetBlock.id, msg({ en: '👉 Use this block', zh: '👉 使用這個積木' }));
         console.log('[highlightToolboxBlock] ✅', blockType);
       };
       setTimeout(tryHighlight, 200);
@@ -868,13 +1040,17 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
       return Math.sqrt((s.x - m.x) ** 2 + (s.y - m.y) ** 2);
     };
 
+    // Blockly v12 requires init() before any blockToCode() call
+    javascriptGenerator.init(ws);
+
     const topBlocks = ws.getTopBlocks(true);
     const flagScripts: Array<() => Promise<void>> = [];
     const keyScripts = new Map<string, Array<() => Promise<void>>>();
     const anyKeyScripts: Array<() => Promise<void>> = [];
 
     for (const block of topBlocks) {
-      const bodyCode = (javascriptGenerator.blockToCode(block) as string) || '';
+      const codeResult = javascriptGenerator.blockToCode(block);
+      const bodyCode = typeof codeResult === 'string' ? codeResult : (codeResult[0] ?? '');
       if (!bodyCode.trim()) continue;
       const runner = new AsyncFunction(bodyCode);
       switch (block.type) {
@@ -949,8 +1125,7 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
 
   function computeTipStyle(tip: BlockTip): React.CSSProperties {
     const ws = workspace.current;
-    const container = workspaceRef.current;
-    if (!ws || !container) return { display: 'none' };
+    if (!ws) return { display: 'none' };
     let block = ws.getBlockById(tip.blockId) as Blockly.BlockSvg | null;
     if (!block) {
       const flyout = ws.getFlyout();
@@ -963,10 +1138,14 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
     const svgEl = block.getSvgRoot();
     if (!svgEl) return { display: 'none' };
     const blockRect = svgEl.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
+    // Portal renders at document.body — position: fixed is always viewport-relative here,
+    // no ancestor transform or overflow can interfere.
     return {
-      left: blockRect.left - containerRect.left,
-      top: Math.max(4, blockRect.top - containerRect.top - 48),
+      position: 'fixed',
+      left: blockRect.left + blockRect.width / 2,
+      top: Math.max(4, blockRect.top - 52),
+      transform: 'translateX(-50%)',
+      zIndex: 9999,
     };
   }
 
@@ -976,7 +1155,7 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
 
   return (
     <div className="scratch-panel-inner">
-      <div className="scratch-toolbar">
+      {!readOnly && <div className="scratch-toolbar">
         <button className="scratch-flag-btn" onClick={() => { void handleStart(); }} disabled={isRunning} title="Start">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 4v16l14-8z" /></svg>
         </button>
@@ -994,16 +1173,19 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
         )}
         <span className="scratch-coords">x: {Math.round(sprite.x)} y: {Math.round(sprite.y)} dir: {Math.round(sprite.direction)}</span>
         <span className={`ai-partner-badge ai-partner-badge--${partnerStatus}`}>{partnerLabel}</span>
-      </div>
+      </div>}
 
-      {objectiveDescription && <div className="scratch-objective-desc">{objectiveDescription}</div>}
+      {objectiveDescription && !readOnly && <div className="scratch-objective-desc">{objectiveDescription}</div>}
 
       <div className="scratch-body">
-        {/* Blockly workspace with tip overlay */}
+        {/* Blockly workspace */}
         <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <div ref={workspaceRef} className="blockly-workspace" />
-          {/* Tip bubbles */}
-          <div className="block-tips-overlay">
+        </div>
+        {/* Tip bubbles — rendered at document.body via portal so no ancestor
+            overflow or Blockly SVG transform can clip or offset them. */}
+        {createPortal(
+          <>
             {Array.from(blockTips.entries()).map(([refId, tip]) => {
               const style = computeTipStyle(tip);
               if (style.display === 'none') return null;
@@ -1015,22 +1197,23 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
                 </div>
               );
             })}
-          </div>
-        </div>
+          </>,
+          document.body
+        )}
 
-        <div className="scratch-stage-area">
+        {!readOnly && <div className="scratch-stage-area">
           <div className="scratch-stage-label">Stage</div>
           <canvas ref={canvasRef} width={300} height={300} className="scratch-canvas" onMouseMove={handleCanvasMouseMove} onClick={handleCanvasClick} />
           <div className="scratch-sprite-info">
             <span>🐱 {sprite.size}%</span>
             <span>mouse: {mouseCoords.x}, {mouseCoords.y}</span>
           </div>
-        </div>
+        </div>}
       </div>
 
-      <div className="scratch-output">
+      {!readOnly && <div className="scratch-output">
         {output.map((msg, i) => <div key={i} className="scratch-bubble">{msg}</div>)}
-      </div>
+      </div>}
     </div>
   );
 });
