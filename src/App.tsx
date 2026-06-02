@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, type KeyboardEvent } from 're
 import type { JSX } from 'react';
 import { useI18n } from './i18n';
 import EN_SYSTEM_PROMPT from './en-sys-prompt.txt?raw';
+import ZH_SYSTEM_PROMPT from './zh-sys-prompt.txt?raw';
 import { BlocklyPanel } from './BlocklyPanel';
 import type { BlocklyPanelHandle } from './BlocklyPanel';
 import type { BlockData } from './scratchPatterns';
@@ -118,7 +119,6 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [isTranslating, setIsTranslating] = useState<boolean>(false);
   const [streamingContent, setStreamingContent] = useState<string>('');
   const [streamingThinking, setStreamingThinking] = useState<string>('');
   const [showSettings, setShowSettings] = useState<boolean>(false);
@@ -195,8 +195,12 @@ function App() {
   };
 
   const buildSystemContent = (): string => {
+    // Pick the prompt by display language so the model replies in that language
+    // directly — no separate translation round-trip. Tool-call args are structured
+    // JSON and language-independent, so reliability is unaffected.
+    const basePrompt = lang === 'zh' ? ZH_SYSTEM_PROMPT : EN_SYSTEM_PROMPT;
     const objDesc = taskObjectives[selectedObjective]?.description;
-    return objDesc ? settings.systemPrompt + '\n\n' + t('objective_heading') + objDesc : settings.systemPrompt;
+    return objDesc ? basePrompt + '\n\n' + t('objective_heading') + objDesc : basePrompt;
   };
 
   const startNewSession = async (): Promise<string | null> => {
@@ -318,16 +322,23 @@ function App() {
     try { args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {}; } catch { /* ignore */ }
     const ref = blocklyRef.current;
     if (!ref) return 'Scratch pad not available';
+    // Tools that target a block must report honest success/failure: if the ref
+    // doesn't resolve to a live block, tell the model so it doesn't believe it
+    // acted on a block that doesn't exist (and can re-fetch fresh context).
+    const requireBlock = (): string | null =>
+      ref.hasBlock(args.blockRef)
+        ? null
+        : `Error: no block matches ref "${args.blockRef}". Call get_scratch_context to get current refs, then retry.`;
     switch (tc.function.name) {
       case 'get_scratch_context': return ref.getContext();
       case 'get_generated_code': return ref.getGeneratedCode();
-      case 'highlight_block': ref.highlightBlock(args.blockRef); return 'Block highlighted';
-      case 'show_block_tip': ref.showBlockTip(args.blockRef, args.message); return 'Tip shown';
+      case 'highlight_block': return requireBlock() ?? (ref.highlightBlock(args.blockRef), `Highlighted ${args.blockRef}`);
+      case 'show_block_tip': return requireBlock() ?? (ref.showBlockTip(args.blockRef, args.message), `Tip shown on ${args.blockRef}`);
       case 'clear_tips': ref.clearBlockTips(); return 'Tips cleared';
-      case 'zoom_to_block': ref.zoomToBlock(args.blockRef); return 'Zoomed to block';
+      case 'zoom_to_block': return requireBlock() ?? (ref.zoomToBlock(args.blockRef), `Zoomed to ${args.blockRef}`);
       case 'zoom_to_fit': ref.zoomToFit(); return 'Zoomed to fit';
-      case 'mark_block_correct': ref.showBlockTip(args.blockRef, '✅ Correct!'); return 'Marked correct';
-      case 'mark_block_issue': ref.showBlockTip(args.blockRef, `⚠️ ${args.message}`); return 'Marked issue';
+      case 'mark_block_correct': return requireBlock() ?? (ref.showBlockTip(args.blockRef, '✅ Correct!'), `Marked ${args.blockRef} correct`);
+      case 'mark_block_issue': return requireBlock() ?? (ref.showBlockTip(args.blockRef, `⚠️ ${args.message}`), `Marked ${args.blockRef} with an issue`);
       case 'highlight_toolbox_block': ref.highlightToolboxBlock(args.category, args.blockType); return `Highlighted ${args.blockType} in ${args.category} toolbox`;
       case 'suggest_category': ref.suggestCategory(args.category); return `Category ${args.category} suggested`;
       case 'run_program': ref.runProgram(); return 'Program running';
@@ -434,39 +445,6 @@ function App() {
 
     const toolCalls = Object.values(toolCallAccum).filter(tc => tc.id);
     return { content: accumulatedContent, thinking: accumulatedThinking, toolCalls };
-  };
-
-  const translateToZh = async (text: string): Promise<string> => {
-    try {
-      const res = await fetch(settings.endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
-        },
-        body: JSON.stringify({
-          model: settings.model,
-          messages: [
-            {
-              role: 'system',
-              content: 'You are a translator. Translate the following text to Traditional Chinese (繁體中文).\nRules:\n- Preserve all markdown formatting (bold, italics, lists, headings)\n- Preserve backtick code spans exactly as-is (e.g. `move (10) steps`, `scratch_movesteps`)\n- Preserve block reference tags exactly (e.g. #ref1, #ref2)\n- Return ONLY the translated text, no preamble or explanation',
-            },
-            { role: 'user', content: text },
-          ],
-          stream: false,
-          // Reasoning models (e.g. Qwen) spend max_tokens on reasoning_content first;
-          // a low cap starves the actual translation, leaving content empty and
-          // silently falling back to English. Give ample headroom for reasoning + output.
-          max_tokens: 8192,
-        }),
-      });
-      if (!res.ok) { return text; }
-      const data = await res.json() as { choices?: { message?: { content?: string } }[] };
-      return data.choices?.[0]?.message?.content?.trim() || text;
-    } catch (e) {
-      console.error('[translateToZh] exception:', e);
-      return text;
-    }
   };
 
   const handleSend = async (text?: string): Promise<void> => {
@@ -581,14 +559,9 @@ function App() {
       setStreamingThinking('');
       setMessages([...currentMessages, { role: 'assistant', content: `${t('Error')}: ${error}` }]);
     } else if (finalContent || finalThinking) {
-      let displayContent = finalContent;
-      const alreadyChinese = /[一-鿿]/.test(finalContent);
-      if (lang === 'zh' && finalContent && !alreadyChinese) {
-        setStreamingContent('');
-        setIsTranslating(true);
-        displayContent = await translateToZh(finalContent);
-        setIsTranslating(false);
-      }
+      // The model already replies in the display language (zh/en prompt), so no
+      // translation step is needed.
+      const displayContent = finalContent;
 
       // Clear loading state BEFORE setting messages — prevents double-render
       setIsLoading(false);
@@ -723,16 +696,6 @@ function App() {
     saveSettings(newSettings);
   };
 
-  // Use a ref so the effect only re-runs when lang changes, not when updateSetting changes
-  const updateSettingRef = useRef(updateSetting);
-  updateSettingRef.current = updateSetting;
-  useEffect(() => {
-    // Backend always uses the English system prompt — reliable tool call args regardless of display language
-    if (settings.systemPrompt !== EN_SYSTEM_PROMPT) {
-      updateSettingRef.current('systemPrompt', EN_SYSTEM_PROMPT);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lang]);
 
   const { triggerWatchdog } = useProactiveAgent(
     { tracker, interventionTracker, onIntervene: handleProactiveIntervention, blocklyRef, llmBusyRef },
@@ -782,11 +745,11 @@ function App() {
               expandedThinking={expandedThinking}
               onToggleThinking={toggleThinking}
             />
-            {(isLoading || streamingContent || isTranslating) && (
+            {(isLoading || streamingContent) && (
               <div className="message bot">
                 <div className="avatar">AI</div>
                 <div className="content">
-                  {streamingThinking && !isTranslating && (
+                  {streamingThinking && (
                     <div className="thinking">
                       <div className="thinking-header" onClick={() => setStreamingThinkingExpanded(!streamingThinkingExpanded)}>
                         {streamingThinkingExpanded ? '▼' : '▶'} {t('Thinking...')}
@@ -796,9 +759,7 @@ function App() {
                       )}
                     </div>
                   )}
-                  {isTranslating ? (
-                    <div className="translating-indicator">翻譯中…</div>
-                  ) : streamingContent ? (
+                  {streamingContent ? (
                     <div dangerouslySetInnerHTML={{ __html: renderMarkdown(parseThinkingBlocks(streamingContent).content) }} />
                   ) : (
                     <div className="loading">

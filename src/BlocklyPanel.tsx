@@ -59,6 +59,7 @@ export interface BlocklyPanelHandle {
   getOutputLogs(): string[];
   getWorkspaceState(): object;     // Blockly.serialization.workspaces.save()
   loadWorkspaceState(state: object): void;
+  hasBlock(ref: string): boolean;  // true if the ref resolves to a live block
 
   // Pointing
   highlightBlock(ref: string): void;
@@ -691,6 +692,12 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
       } catch (e) {
         console.error('[loadWorkspaceState] failed:', e);
       }
+    },
+    hasBlock(refId: string) {
+      const ws = workspace.current;
+      if (!ws) return false;
+      const blockId = resolveRef(refId, blockRefsMap.current);
+      return !!(blockId && ws.getBlockById(blockId));
     },
 
     // ── Pointing ───────────────────────────────────────────────────
