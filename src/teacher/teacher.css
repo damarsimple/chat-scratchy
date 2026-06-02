@@ -284,3 +284,33 @@
 .teacher-control-btn.primary:hover { background: #5b21b6; }
 .teacher-control-sep { width: 1px; align-self: stretch; background: #e5e7eb; margin: 0 2px; }
 .teacher-control-msg { font-size: 12px; color: #6d28d9; margin-left: auto; }
+
+/* Teacher-managed objectives editor */
+.teacher-objectives { margin-bottom: 16px; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; background: #fff; }
+.teacher-obj-header {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; background: #f9fafb; border: none; cursor: pointer;
+  font-size: 15px; font-weight: 600; color: #111827; text-align: left;
+}
+.teacher-obj-header:hover { background: #f3f4f6; }
+.teacher-obj-hint { margin-left: auto; font-size: 12px; font-weight: 400; color: #9ca3af; }
+.teacher-obj-body { padding: 12px 16px; }
+.teacher-obj-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.teacher-obj-item { border: 1px solid #eef2f7; border-radius: 10px; padding: 10px 12px; }
+.teacher-obj-view { display: flex; align-items: flex-start; gap: 12px; }
+.teacher-obj-main { flex: 1; }
+.teacher-obj-title { font-weight: 600; color: #1f2937; }
+.teacher-obj-desc { font-size: 13px; color: #6b7280; margin-top: 2px; }
+.teacher-obj-badge {
+  display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 999px;
+  background: #ede9fe; color: #6d28d9; font-size: 11px; font-weight: 600;
+}
+.teacher-obj-actions { display: flex; gap: 6px; }
+.teacher-obj-form { display: flex; flex-direction: column; gap: 8px; }
+.teacher-obj-add { border-top: 1px dashed #e5e7eb; padding-top: 12px; }
+.teacher-obj-input, .teacher-obj-textarea, .teacher-obj-select {
+  border: 1px solid #d1d5db; border-radius: 8px; padding: 7px 10px; font-size: 13px; font-family: inherit;
+}
+.teacher-obj-textarea { resize: vertical; min-height: 48px; }
+.teacher-obj-row { display: flex; gap: 8px; align-items: center; }
+.teacher-obj-select { flex: 1; }

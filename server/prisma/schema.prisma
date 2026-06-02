@@ -29,10 +29,29 @@ model Class {
   teacherId String
   teacher   Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
 
-  students Student[]
-  sessions Session[]
+  students   Student[]
+  sessions   Session[]
+  objectives Objective[]
 
   @@index([teacherId])
+}
+
+// Teacher-authored learning objective for a class. When a class has no
+// objectives the student app falls back to the bundled built-in set.
+model Objective {
+  id          String   @id @default(uuid())
+  title       String
+  description String   @default("")
+  // Optional link to a built-in heuristic completion checker (see objectives.ts):
+  // 'animation' | 'cat-mouse' | 'quiz' | 'pong' | 'falling'. Null = no auto-check.
+  checkKey    String?
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  classId String
+  class   Class  @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@index([classId])
 }
 
 model Student {

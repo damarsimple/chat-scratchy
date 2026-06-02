@@ -72,6 +72,14 @@ teacherRouter.get('/classes/:id', async (req, res) => {
     },
   });
 
+  // Map this class's custom-objective ids → titles so the roster can show a
+  // human label for teacher-authored objectives (built-in ids stay as-is and are
+  // labelled client-side).
+  const classObjectives = await prisma.objective.findMany({
+    where: { classId: klass.id }, select: { id: true, title: true },
+  });
+  const titleById = new Map(classObjectives.map((o) => [o.id, o.title]));
+
   const now = Date.now();
   const roster = students.map((s) => {
     const latest = s.sessions[0] ?? null;
@@ -85,6 +93,7 @@ teacherRouter.get('/classes/:id', async (req, res) => {
       displayName: s.displayName,
       latestSessionId: latest?.id ?? null,
       objectiveId: latest?.objectiveId ?? null,
+      objectiveTitle: latest?.objectiveId ? (titleById.get(latest.objectiveId) ?? null) : null,
       objectiveComplete: completed,
       lastActiveAt,
       online,
@@ -98,7 +107,7 @@ teacherRouter.get('/classes/:id', async (req, res) => {
   const byObjective = {};
   for (const r of roster) {
     const key = r.objectiveId ?? '(none)';
-    byObjective[key] ??= { objectiveId: r.objectiveId, students: 0, completed: 0 };
+    byObjective[key] ??= { objectiveId: r.objectiveId, objectiveTitle: r.objectiveTitle, students: 0, completed: 0 };
     byObjective[key].students++;
     if (r.objectiveComplete) byObjective[key].completed++;
   }
@@ -110,6 +119,73 @@ teacherRouter.get('/classes/:id', async (req, res) => {
   };
 
   res.json({ id: klass.id, name: klass.name, joinCode: klass.joinCode, roster, aggregate });
+});
+
+// ── Objectives (teacher-managed) ─────────────────────────────────────
+
+const VALID_CHECK_KEYS = new Set(['animation', 'cat-mouse', 'quiz', 'pong', 'falling']);
+const normCheckKey = (k) => (k && VALID_CHECK_KEYS.has(k) ? k : null);
+
+// GET /api/teacher/classes/:id/objectives
+teacherRouter.get('/classes/:id/objectives', async (req, res) => {
+  const klass = await ownedClass(req.teacherId, req.params.id);
+  if (!klass) return res.status(404).json({ error: 'Class not found' });
+  const objectives = await prisma.objective.findMany({
+    where: { classId: klass.id }, orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+  });
+  res.json(objectives);
+});
+
+// POST /api/teacher/classes/:id/objectives { title, description?, checkKey? }
+teacherRouter.post('/classes/:id/objectives', async (req, res) => {
+  const klass = await ownedClass(req.teacherId, req.params.id);
+  if (!klass) return res.status(404).json({ error: 'Class not found' });
+  const { title, description, checkKey } = req.body ?? {};
+  if (!title || !title.trim()) return res.status(400).json({ error: 'title required' });
+  const count = await prisma.objective.count({ where: { classId: klass.id } });
+  const objective = await prisma.objective.create({
+    data: {
+      classId: klass.id,
+      title: title.trim().slice(0, 120),
+      description: (description ?? '').slice(0, 1000),
+      checkKey: normCheckKey(checkKey),
+      order: count,
+    },
+  });
+  res.json(objective);
+});
+
+// Verify the requesting teacher owns the objective's class; returns it or null.
+async function ownedObjective(teacherId, objectiveId) {
+  const obj = await prisma.objective.findUnique({
+    where: { id: objectiveId }, include: { class: { select: { teacherId: true } } },
+  });
+  return obj && obj.class?.teacherId === teacherId ? obj : null;
+}
+
+// PUT /api/teacher/objectives/:id { title?, description?, checkKey?, order? }
+teacherRouter.put('/objectives/:id', async (req, res) => {
+  const owned = await ownedObjective(req.teacherId, req.params.id);
+  if (!owned) return res.status(404).json({ error: 'Objective not found' });
+  const { title, description, checkKey, order } = req.body ?? {};
+  const objective = await prisma.objective.update({
+    where: { id: req.params.id },
+    data: {
+      ...(title !== undefined ? { title: String(title).trim().slice(0, 120) } : {}),
+      ...(description !== undefined ? { description: String(description).slice(0, 1000) } : {}),
+      ...(checkKey !== undefined ? { checkKey: normCheckKey(checkKey) } : {}),
+      ...(order !== undefined ? { order: Number(order) } : {}),
+    },
+  });
+  res.json(objective);
+});
+
+// DELETE /api/teacher/objectives/:id
+teacherRouter.delete('/objectives/:id', async (req, res) => {
+  const owned = await ownedObjective(req.teacherId, req.params.id);
+  if (!owned) return res.status(404).json({ error: 'Objective not found' });
+  await prisma.objective.delete({ where: { id: req.params.id } });
+  res.json({ success: true });
 });
 
 // GET /api/teacher/sessions/:id  → full session detail for the viewer

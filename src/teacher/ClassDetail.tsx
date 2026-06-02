@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { teacherApi, subscribeLive, objectiveLabel, type ClassDetail as ClassDetailData } from '../api';
+import { ObjectivesManager } from './ObjectivesManager';
 
 function timeAgo(iso: string | null): string {
   if (!iso) return 'never';
@@ -51,6 +52,8 @@ export function ClassDetail() {
       </header>
 
       <main className="teacher-main">
+        {classId && <ObjectivesManager classId={classId} />}
+
         {/* Class aggregate overview */}
         {data.aggregate && data.roster.length > 0 && (
           <div className="teacher-aggregate">
@@ -71,7 +74,7 @@ export function ClassDetail() {
             <div className="teacher-agg-objectives">
               {data.aggregate.byObjective.map((o) => (
                 <div key={o.objectiveId ?? 'none'} className="teacher-agg-obj">
-                  <span className="teacher-agg-obj-name">{objectiveLabel(o.objectiveId)}</span>
+                  <span className="teacher-agg-obj-name">{o.objectiveTitle ?? objectiveLabel(o.objectiveId)}</span>
                   <div className="teacher-agg-bar">
                     <div
                       className="teacher-agg-bar-fill"
@@ -109,7 +112,7 @@ export function ClassDetail() {
                     <span className={`teacher-dot ${s.online ? 'online' : 'offline'}`} />
                     {s.online ? 'Active' : 'Idle'}
                   </td>
-                  <td>{objectiveLabel(s.objectiveId)}</td>
+                  <td>{s.objectiveTitle ?? objectiveLabel(s.objectiveId)}</td>
                   <td>
                     {s.objectiveComplete
                       ? <span className="teacher-badge-done">✅ Done</span>

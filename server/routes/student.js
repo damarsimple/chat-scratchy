@@ -41,6 +41,17 @@ studentRouter.post('/join', async (req, res) => {
   });
 });
 
+// GET /api/classes/:id/objectives  → the class's teacher-authored objectives
+// (ordered). Empty list means the student app uses its bundled built-in set.
+studentRouter.get('/classes/:id/objectives', async (req, res) => {
+  const objectives = await prisma.objective.findMany({
+    where: { classId: req.params.id },
+    orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+    select: { id: true, title: true, description: true, checkKey: true },
+  });
+  res.json(objectives);
+});
+
 // GET /api/students/:id/profile  → the rolling AI memory for this student
 studentRouter.get('/students/:id/profile', async (req, res) => {
   const student = await prisma.student.findUnique({

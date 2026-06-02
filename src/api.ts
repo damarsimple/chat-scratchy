@@ -118,7 +118,27 @@ export const teacherApi = {
     http<{ success: boolean }>(`/teacher/sessions/${sessionId}/command`, {
       method: 'POST', body: JSON.stringify({ type, payload }),
     }),
+
+  // Objectives (teacher-managed, per class).
+  listObjectives: (classId: string) => http<Objective[]>(`/teacher/classes/${classId}/objectives`),
+  createObjective: (classId: string, input: ObjectiveInput) =>
+    http<Objective>(`/teacher/classes/${classId}/objectives`, { method: 'POST', body: JSON.stringify(input) }),
+  updateObjective: (id: string, input: Partial<ObjectiveInput> & { order?: number }) =>
+    http<Objective>(`/teacher/objectives/${id}`, { method: 'PUT', body: JSON.stringify(input) }),
+  deleteObjective: (id: string) => http<{ success: boolean }>(`/teacher/objectives/${id}`, { method: 'DELETE' }),
 };
+
+// ── Objectives ──────────────────────────────────────────────────────
+
+export interface Objective {
+  id: string; title: string; description: string; checkKey: string | null; order?: number;
+}
+export interface ObjectiveInput { title: string; description?: string; checkKey?: string | null; }
+
+// Student-side: the class's teacher-authored objectives (empty → use built-ins).
+export function getClassObjectives(classId: string): Promise<Objective[]> {
+  return http(`/classes/${classId}/objectives`);
+}
 
 // ── Teacher types ───────────────────────────────────────────────────
 
@@ -129,12 +149,14 @@ export interface ClassSummary {
 
 export interface RosterEntry {
   studentId: string; displayName: string; latestSessionId: string | null;
-  objectiveId: string | null; objectiveComplete: boolean;
+  objectiveId: string | null; objectiveTitle: string | null; objectiveComplete: boolean;
   lastActiveAt: string | null; online: boolean;
   interventionCount: number; blockSummary: string;
 }
 
-export interface ObjectiveAgg { objectiveId: string | null; students: number; completed: number; }
+export interface ObjectiveAgg {
+  objectiveId: string | null; objectiveTitle?: string | null; students: number; completed: number;
+}
 export interface ClassAggregate {
   totalStudents: number; online: number; completed: number; byObjective: ObjectiveAgg[];
 }

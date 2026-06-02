@@ -15,8 +15,8 @@ import { StudentJoin } from './StudentJoin';
 import { checkObjective } from './objectives';
 import {
   loadIdentity, saveBlockly, postEvent, postIntervention, ping,
-  getStudentProfile, saveStudentProfile, subscribeCommands,
-  type StudentIdentity, type TeacherCommand,
+  getStudentProfile, saveStudentProfile, subscribeCommands, getClassObjectives,
+  type StudentIdentity, type TeacherCommand, type Objective,
 } from './api';
 
 interface ToolCallDef {
@@ -141,6 +141,9 @@ function App() {
   const [currentBlocks, setCurrentBlocks] = useState<BlockData[]>([]);
   const [confidenceSignal, setConfidenceSignal] = useState<string | null>(null);
   const [selectedObjective, setSelectedObjective] = useState(0);
+  // Teacher-authored objectives for this student's class (null = not loaded yet;
+  // empty = none, fall back to the bundled built-ins below).
+  const [classObjectives, setClassObjectives] = useState<Objective[] | null>(null);
   const [partnerStatus, setPartnerStatus] = useState<'idle' | 'analyzing' | 'intervening'>('idle');
   // Objective completion banner + once-per-session "completed" guard.
   const [objectiveComplete, setObjectiveComplete] = useState(false);
@@ -162,6 +165,10 @@ function App() {
   // Current objective id + session id, kept in refs so the (stable) block-change
   // callback always reads fresh values without re-subscribing the Blockly listener.
   const objectiveIdRef = useRef<string | undefined>(undefined);
+  // The heuristic key used for auto-completion (built-in id, custom checkKey, or
+  // undefined when the objective has no auto-check). Tracked separately from the
+  // objective identity (objectiveIdRef) used for events/session.
+  const checkKeyRef = useRef<string | undefined>(undefined);
   const currentSessionIdRef = useRef<string | null>(null);
   currentSessionIdRef.current = currentSessionId;
   const messagesRef = useRef<Message[]>(messages);
@@ -182,22 +189,32 @@ function App() {
   const { t, lang, toggleLang } = useI18n();
   langRef.current = lang;
 
-  const taskObjectives = [
-    { id: 'animation', label: t('objective_animation_label'), description: t('objective_animation_desc') },
-    { id: 'cat-mouse', label: t('objective_cat_mouse_label'), description: t('objective_cat_mouse_desc') },
-    { id: 'quiz', label: t('objective_quiz_label'), description: t('objective_quiz_desc') },
-    { id: 'pong', label: t('objective_pong_label'), description: t('objective_pong_desc') },
-    { id: 'falling', label: t('objective_falling_label'), description: t('objective_falling_desc') },
+  // Bundled built-in objectives (bilingual via i18n). Each carries a checkKey
+  // equal to its id so completion auto-detection works.
+  const builtinObjectives = [
+    { id: 'animation', label: t('objective_animation_label'), description: t('objective_animation_desc'), checkKey: 'animation' },
+    { id: 'cat-mouse', label: t('objective_cat_mouse_label'), description: t('objective_cat_mouse_desc'), checkKey: 'cat-mouse' },
+    { id: 'quiz', label: t('objective_quiz_label'), description: t('objective_quiz_desc'), checkKey: 'quiz' },
+    { id: 'pong', label: t('objective_pong_label'), description: t('objective_pong_desc'), checkKey: 'pong' },
+    { id: 'falling', label: t('objective_falling_label'), description: t('objective_falling_desc'), checkKey: 'falling' },
   ];
 
-  // Keep the objective-id ref in sync and re-check completion against the new
-  // objective when the student switches tasks.
-  const currentObjectiveId = taskObjectives[selectedObjective]?.id;
+  // Use the teacher's objectives when the class has any; otherwise the built-ins.
+  const taskObjectives = (classObjectives && classObjectives.length > 0)
+    ? classObjectives.map((o) => ({ id: o.id, label: o.title, description: o.description, checkKey: o.checkKey ?? undefined }))
+    : builtinObjectives;
+
+  // Keep the objective-id + checkKey refs in sync and re-check completion against
+  // the new objective when the student switches tasks.
+  const current = taskObjectives[selectedObjective];
+  const currentObjectiveId = current?.id;
+  const currentCheckKey = current?.checkKey;
   useEffect(() => {
     objectiveIdRef.current = currentObjectiveId;
-    const status = checkObjective(currentObjectiveId, currentBlocks);
+    checkKeyRef.current = currentCheckKey;
+    const status = checkObjective(currentCheckKey, currentBlocks);
     setObjectiveComplete(status?.complete ?? false);
-  }, [currentObjectiveId, currentBlocks]);
+  }, [currentObjectiveId, currentCheckKey, currentBlocks]);
 
   useEffect(() => {
     void loadSessionsList();
@@ -210,6 +227,13 @@ function App() {
     if (!sid) return;
     void getStudentProfile(sid).then((p) => { studentProfileRef.current = p.profile ?? ''; }).catch(() => {});
   }, [identity?.studentId]);
+
+  // Load the class's teacher-authored objectives (falls back to built-ins if none).
+  useEffect(() => {
+    const cid = identity?.classId;
+    if (!cid) { setClassObjectives([]); return; }
+    void getClassObjectives(cid).then(setClassObjectives).catch(() => setClassObjectives([]));
+  }, [identity?.classId]);
 
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -751,10 +775,11 @@ function App() {
       if (!recent) return;
 
       const objId = objectiveIdRef.current;
+      const objName = taskObjectives[selectedObjective]?.label ?? objId;
       const blocksCtx = blocklyRef.current?.getContext() ?? '';
-      const status = checkObjective(objId, currentBlocks);
+      const status = checkObjective(checkKeyRef.current, currentBlocks);
       const objLine = objId
-        ? `Objective "${objId}": ${status ? Math.round(status.progress * 100) + '% done' + (status.complete ? ' (COMPLETE)' : '') : 'in progress'}.`
+        ? `Objective "${objName}": ${status ? Math.round(status.progress * 100) + '% done' + (status.complete ? ' (COMPLETE)' : '') : 'in progress'}.`
         : 'No objective selected.';
 
       const sys = 'You maintain a concise tutoring memory about a young Scratch student across sessions. '
@@ -806,8 +831,9 @@ function App() {
 
     // Objective completion: re-evaluate against the current objective. Fire once
     // per (session, objective) so we don't spam events as blocks keep changing.
+    // Completion uses the heuristic checkKey; identity/events use the objective id.
     const objId = objectiveIdRef.current;
-    const status = checkObjective(objId, blocks);
+    const status = checkObjective(checkKeyRef.current, blocks);
     if (status) {
       setObjectiveComplete(status.complete);
       const sid = currentSessionIdRef.current;
