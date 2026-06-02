@@ -454,7 +454,10 @@ function App() {
             { role: 'user', content: text },
           ],
           stream: false,
-          max_tokens: 1024,
+          // Reasoning models (e.g. Qwen) spend max_tokens on reasoning_content first;
+          // a low cap starves the actual translation, leaving content empty and
+          // silently falling back to English. Give ample headroom for reasoning + output.
+          max_tokens: 8192,
         }),
       });
       if (!res.ok) { return text; }

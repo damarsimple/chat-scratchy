@@ -138,7 +138,10 @@ async function callWatchdogAgent(
           { role: 'user', content: JSON.stringify(context) },
         ],
         stream: false,
-        max_tokens: 2048,
+        // Reasoning models spend max_tokens on reasoning_content before the JSON
+        // decision; too low a cap starves the output and the watchdog silently
+        // no-ops (parse fails → null). Leave ample headroom.
+        max_tokens: 8192,
       }),
     });
     if (!res.ok) return null;
