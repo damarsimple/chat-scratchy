@@ -16,6 +16,10 @@ export function SessionViewer() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('workspace');
   const [expandedThinking, setExpandedThinking] = useState<Set<number>>(new Set());
+  // Live control: when on, the workspace panel becomes editable so the teacher
+  // can rearrange blocks and push the result to the student.
+  const [editMode, setEditMode] = useState(false);
+  const [controlMsg, setControlMsg] = useState<string | null>(null);
   const blocklyRef = useRef<BlocklyPanelHandle>(null);
 
   const refresh = useCallback(() => {
@@ -25,18 +29,26 @@ export function SessionViewer() {
 
   useEffect(refresh, [refresh]);
 
-  // Live updates for this session (throttled refresh).
+  // Don't let the live refresh reload the workspace mid-edit and wipe the
+  // teacher's in-progress changes.
+  const editModeRef = useRef(false);
+  editModeRef.current = editMode;
+
+  // Live updates for this session (throttled refresh, paused while editing).
   useEffect(() => {
     if (!sessionId) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = subscribeLive({ sessionId }, () => {
-      if (timer) return;
+      if (timer || editModeRef.current) return;
       timer = setTimeout(() => { timer = null; refresh(); }, 1200);
     });
     return () => { if (timer) clearTimeout(timer); unsub(); };
   }, [sessionId, refresh]);
 
-  // Load the student's workspace JSON into the read-only Blockly panel.
+  // Load the student's workspace JSON into the Blockly panel. Re-runs when the
+  // panel remounts (edit-mode toggle) so the teacher always starts from the
+  // student's current blocks. Skipped in edit mode on a live refresh so we don't
+  // clobber the teacher's in-progress edits.
   useEffect(() => {
     if (tab !== 'workspace' || !data?.latestWorkspace?.workspaceJson) return;
     // Defer so the panel has mounted/injected before we load state.
@@ -44,7 +56,8 @@ export function SessionViewer() {
       blocklyRef.current?.loadWorkspaceState(data.latestWorkspace!.workspaceJson as object);
     }, 100);
     return () => clearTimeout(id);
-  }, [tab, data?.latestWorkspace]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, editMode, data?.latestWorkspace?.id]);
 
   const toggleThinking = (idx: number) => {
     setExpandedThinking((prev) => {
@@ -52,6 +65,41 @@ export function SessionViewer() {
       if (next.has(idx)) next.delete(idx); else next.add(idx);
       return next;
     });
+  };
+
+  // ── Live control: push commands to the student's screen ──────────────
+  const flashControl = (msg: string) => {
+    setControlMsg(msg);
+    setTimeout(() => setControlMsg((m) => (m === msg ? null : m)), 2500);
+  };
+  const send = (type: 'highlight' | 'tip' | 'clear' | 'load_workspace', payload?: unknown) => {
+    if (!sessionId) return;
+    teacherApi.sendCommand(sessionId, type, payload).catch((e) => flashControl(`Failed: ${e.message ?? e}`));
+  };
+  const highlightSelected = () => {
+    const id = blocklyRef.current?.getSelectedBlockId();
+    if (!id) return flashControl('Turn on Edit mode, then click a block to select it.');
+    send('highlight', { blockId: id });
+    flashControl('Highlighted on student’s screen.');
+  };
+  const tipSelected = () => {
+    const id = blocklyRef.current?.getSelectedBlockId();
+    if (!id) return flashControl('Turn on Edit mode, then click a block to select it.');
+    const message = window.prompt('Tip to show on the student’s block:');
+    if (!message) return;
+    send('tip', { blockId: id, message });
+    flashControl('Tip sent.');
+  };
+  const clearStudent = () => { send('clear'); flashControl('Cleared on student’s screen.'); };
+  const pushWorkspace = () => {
+    const ref = blocklyRef.current;
+    if (!ref) return;
+    send('load_workspace', {
+      workspaceJson: ref.getWorkspaceState(),
+      generatedCode: ref.getGeneratedCode(),
+      blockSummary: ref.getContext(),
+    });
+    flashControl('Pushed your blocks to the student.');
   };
 
   if (loading) return <div className="teacher-loading">Loading session…</div>;
@@ -109,9 +157,30 @@ export function SessionViewer() {
 
           <div className="teacher-tab-body">
             {tab === 'workspace' && (
-              data.latestWorkspace?.workspaceJson
-                ? <BlocklyPanel ref={blocklyRef} readOnly />
-                : <div className="teacher-empty-sm">No saved workspace for this session yet.</div>
+              data.latestWorkspace?.workspaceJson ? (
+                <>
+                  <div className="teacher-control-bar">
+                    <button className="teacher-control-btn" onClick={highlightSelected}>👉 Highlight</button>
+                    <button className="teacher-control-btn" onClick={tipSelected}>💬 Tip</button>
+                    <button className="teacher-control-btn" onClick={clearStudent}>✖ Clear</button>
+                    <span className="teacher-control-sep" />
+                    <button
+                      className={`teacher-control-btn ${editMode ? 'active' : ''}`}
+                      onClick={() => setEditMode((e) => !e)}
+                    >
+                      {editMode ? '🔓 Editing' : '✏️ Edit mode'}
+                    </button>
+                    {editMode && (
+                      <button className="teacher-control-btn primary" onClick={pushWorkspace}>⬆ Push to student</button>
+                    )}
+                    {controlMsg && <span className="teacher-control-msg">{controlMsg}</span>}
+                  </div>
+                  {/* key flips on edit toggle to remount the panel editable/read-only */}
+                  <BlocklyPanel key={editMode ? 'edit' : 'ro'} ref={blocklyRef} readOnly={!editMode} />
+                </>
+              ) : (
+                <div className="teacher-empty-sm">No saved workspace for this session yet.</div>
+              )
             )}
             {tab === 'code' && (
               <pre className="teacher-code">{data.latestWorkspace?.generatedCode || '// No generated code yet.'}</pre>

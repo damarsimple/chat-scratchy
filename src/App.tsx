@@ -15,8 +15,8 @@ import { StudentJoin } from './StudentJoin';
 import { checkObjective } from './objectives';
 import {
   loadIdentity, saveBlockly, postEvent, postIntervention, ping,
-  getStudentProfile, saveStudentProfile,
-  type StudentIdentity,
+  getStudentProfile, saveStudentProfile, subscribeCommands,
+  type StudentIdentity, type TeacherCommand,
 } from './api';
 
 interface ToolCallDef {
@@ -145,6 +145,9 @@ function App() {
   // Objective completion banner + once-per-session "completed" guard.
   const [objectiveComplete, setObjectiveComplete] = useState(false);
   const completedObjectivesRef = useRef<Set<string>>(new Set());
+  // Transient banner shown when the teacher acts on this student's screen live.
+  const [teacherActivity, setTeacherActivity] = useState<string | null>(null);
+  const teacherActivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamingThinkingRef = useRef<HTMLPreElement>(null);
@@ -163,6 +166,8 @@ function App() {
   currentSessionIdRef.current = currentSessionId;
   const messagesRef = useRef<Message[]>(messages);
   messagesRef.current = messages;
+  // Latest display language for callbacks bound to a stable effect (command stream).
+  const langRef = useRef<string>('en');
   // Rolling AI memory: the tutor's accumulated notes about this student, loaded on
   // mount and injected into the system prompt. Kept in a ref so buildSystemContent
   // (and the summary updater) always read the latest without re-binding.
@@ -175,6 +180,7 @@ function App() {
   const interventionTracker = useInterventionTracker();
 
   const { t, lang, toggleLang } = useI18n();
+  langRef.current = lang;
 
   const taskObjectives = [
     { id: 'animation', label: t('objective_animation_label'), description: t('objective_animation_desc') },
@@ -225,6 +231,44 @@ function App() {
     beat();
     const interval = setInterval(beat, 30_000);
     return () => clearInterval(interval);
+  }, [currentSessionId]);
+
+  // Live teacher control: apply highlight / tip / clear / workspace-push commands
+  // pushed from the dashboard to this student's screen in near-real-time.
+  useEffect(() => {
+    if (!currentSessionId) return;
+    const flash = (msg: string) => {
+      setChatMinimized(false);
+      setTeacherActivity(msg);
+      if (teacherActivityTimer.current) clearTimeout(teacherActivityTimer.current);
+      teacherActivityTimer.current = setTimeout(() => setTeacherActivity(null), 6000);
+    };
+    const unsub = subscribeCommands(currentSessionId, (cmd: TeacherCommand) => {
+      const ref = blocklyRef.current;
+      if (!ref) return;
+      const zh = langRef.current === 'zh';
+      const p = cmd.payload as { blockId?: string; message?: string; workspaceJson?: object };
+      switch (cmd.type) {
+        case 'highlight':
+          ref.highlightBlockId(p.blockId ?? null);
+          if (p.blockId && p.message) ref.showBlockTipById(p.blockId, p.message);
+          flash(zh ? '👩‍🏫 老師正在指出一個積木' : '👩‍🏫 Your teacher is pointing at a block');
+          break;
+        case 'tip':
+          if (p.blockId && p.message) ref.showBlockTipById(p.blockId, p.message);
+          flash(zh ? '👩‍🏫 老師留了一個提示' : '👩‍🏫 Your teacher left a tip');
+          break;
+        case 'clear':
+          ref.highlightBlockId(null);
+          ref.clearBlockTips();
+          break;
+        case 'load_workspace':
+          if (p.workspaceJson) ref.loadWorkspaceState(p.workspaceJson);
+          flash(zh ? '👩‍🏫 老師更新了你的積木' : '👩‍🏫 Your teacher updated your blocks');
+          break;
+      }
+    });
+    return () => { unsub(); if (teacherActivityTimer.current) clearTimeout(teacherActivityTimer.current); };
   }, [currentSessionId]);
 
   const loadSessionsList = async (): Promise<void> => {
@@ -915,6 +959,9 @@ function App() {
         <>
           {objectiveComplete && (
             <div className="objective-complete-banner">{t('objective_complete')}</div>
+          )}
+          {teacherActivity && (
+            <div className="teacher-activity-banner">{teacherActivity}</div>
           )}
           <div className="chat-container" ref={chatContainerRef}>
             {isEmpty && (

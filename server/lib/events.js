@@ -13,3 +13,10 @@ export function publish(sessionId, classId, kind, data) {
   if (sessionId) bus.emit(`session:${sessionId}`, payload);
   if (classId) bus.emit(`class:${classId}`, payload);
 }
+
+// Reverse channel: a teacher command pushed to the student's session.
+// type: 'highlight' | 'clear' | 'tip' | 'load_workspace'
+export function publishCommand(sessionId, type, payload) {
+  if (!sessionId) return;
+  bus.emit(`cmd:${sessionId}`, { type, payload: payload ?? {}, at: Date.now() });
+}

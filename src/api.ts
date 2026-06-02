@@ -113,6 +113,11 @@ export const teacherApi = {
   getSession: (id: string) => http<TeacherSession>(`/teacher/sessions/${id}`),
   getSnapshots: (id: string) => http<SnapshotMeta[]>(`/teacher/sessions/${id}/snapshots`),
   getSnapshot: (id: string) => http<BlocklySnapshot>(`/teacher/snapshots/${id}`),
+  // Live two-way control: push a command to the student's screen.
+  sendCommand: (sessionId: string, type: TeacherCommandType, payload?: unknown) =>
+    http<{ success: boolean }>(`/teacher/sessions/${sessionId}/command`, {
+      method: 'POST', body: JSON.stringify({ type, payload }),
+    }),
 };
 
 // ── Teacher types ───────────────────────────────────────────────────
@@ -190,6 +195,20 @@ export interface LiveEvent {
   sessionId: string | null; classId: string | null;
   kind: 'chat' | 'blockly' | 'event' | 'intervention' | 'presence';
   data: unknown; at: number;
+}
+
+// ── Teacher → student live commands ─────────────────────────────────
+
+export type TeacherCommandType = 'highlight' | 'tip' | 'clear' | 'load_workspace';
+export interface TeacherCommand { type: TeacherCommandType; payload: Record<string, unknown>; at: number; }
+
+// Student-side: subscribe to live teacher commands for this session.
+export function subscribeCommands(sessionId: string, onCommand: (cmd: TeacherCommand) => void): () => void {
+  const es = new EventSource(`${API_BASE}/sessions/${sessionId}/command-stream`, { withCredentials: true });
+  es.onmessage = (e) => {
+    try { onCommand(JSON.parse(e.data) as TeacherCommand); } catch { /* ignore keep-alives */ }
+  };
+  return () => es.close();
 }
 
 // Subscribe to a class or session live stream. Returns an unsubscribe fn.

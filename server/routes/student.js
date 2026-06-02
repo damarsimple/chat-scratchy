@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { prisma } from '../lib/db.js';
-import { publish } from '../lib/events.js';
+import { publish, bus } from '../lib/events.js';
 
 export const studentRouter = Router();
 
@@ -211,6 +211,32 @@ studentRouter.patch('/interventions/:id', async (req, res) => {
   } catch {
     res.status(404).json({ error: 'Intervention not found' });
   }
+});
+
+// GET /api/sessions/:id/command-stream  → SSE of live teacher commands for this
+// session (highlight / tip / clear / workspace push). Knowing the session id is
+// the capability here — same trust model as the rest of the student endpoints.
+studentRouter.get('/sessions/:id/command-stream', async (req, res) => {
+  const exists = await prisma.session.findUnique({ where: { id: req.params.id }, select: { id: true } });
+  if (!exists) return res.status(404).json({ error: 'Session not found' });
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.write('retry: 3000\n\n');
+
+  const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  const channel = `cmd:${req.params.id}`;
+  bus.on(channel, send);
+  const keepAlive = setInterval(() => res.write(': ping\n\n'), 25_000);
+
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    bus.off(channel, send);
+    res.end();
+  });
 });
 
 // POST /api/sessions/:id/ping  → presence heartbeat

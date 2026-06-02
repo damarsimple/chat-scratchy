@@ -612,6 +612,18 @@ textarea::placeholder {
   to   { transform: scale(1); opacity: 1; }
 }
 
+.teacher-activity-banner {
+  margin: 8px 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #8b5cf6, #6d28d9);
+  color: #fff;
+  font-weight: 600;
+  text-align: center;
+  font-size: 14px;
+  animation: objective-pop 0.3s ease;
+}
+
 .empty-state {
   display: flex;
   flex-direction: column;

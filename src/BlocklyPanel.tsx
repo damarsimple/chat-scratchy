@@ -66,6 +66,13 @@ export interface BlocklyPanelHandle {
   zoomToBlock(ref: string): void;
   zoomToFit(): void;
 
+  // Raw-blockId variants for cross-client control (teacher→student live ops):
+  // both panels load the same workspace JSON, so block IDs are identical and
+  // don't depend on each side having an up-to-date #refN map.
+  getSelectedBlockId(): string | null;
+  highlightBlockId(blockId: string | null): void; // null clears all highlights
+  showBlockTipById(blockId: string, message: string): void;
+
   // Annotation
   showBlockTip(blockRef: string, message: string): void;
   clearBlockTips(): void;
@@ -720,6 +727,27 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
       ws.centerOnBlock(blockId);
     },
     zoomToFit() { workspace.current?.zoomToFit(); },
+
+    // ── Raw-blockId control (teacher→student live ops) ─────────────
+    getSelectedBlockId() {
+      const sel = Blockly.getSelected();
+      // Selected item is a block when it exposes an id we can resolve.
+      const id = (sel as { id?: string } | null)?.id;
+      return id && workspace.current?.getBlockById(id) ? id : null;
+    },
+    highlightBlockId(blockId: string | null) {
+      const ws = workspace.current;
+      if (!ws) return;
+      ws.getAllBlocks().forEach((b) => b.setHighlighted(false));
+      if (!blockId) return;
+      const block = ws.getBlockById(blockId);
+      if (!block) return;
+      block.setHighlighted(true);
+      ws.centerOnBlock(blockId);
+    },
+    showBlockTipById(blockId: string, message: string) {
+      if (workspace.current?.getBlockById(blockId)) internalShowTip(blockId, message);
+    },
 
     // ── Annotation ─────────────────────────────────────────────────
     showBlockTip(refId: string, message: string) {

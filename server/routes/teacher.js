@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { prisma } from '../lib/db.js';
 import { requireTeacher, generateJoinCode } from '../lib/auth.js';
+import { publishCommand } from '../lib/events.js';
+
+const COMMAND_TYPES = new Set(['highlight', 'tip', 'clear', 'load_workspace']);
 
 export const teacherRouter = Router();
 teacherRouter.use(requireTeacher);
@@ -151,6 +154,38 @@ teacherRouter.get('/sessions/:id', async (req, res) => {
     activityEvents: session.activityEvents,
     stats: { interventionCount: session.interventions.length, effectivenessRate },
   });
+});
+
+// POST /api/teacher/sessions/:id/command  { type, payload }
+// Live two-way control: push a highlight / tip / clear / workspace edit to the
+// student's screen. Teacher must own the session's class.
+teacherRouter.post('/sessions/:id/command', async (req, res) => {
+  const { type, payload } = req.body ?? {};
+  if (!COMMAND_TYPES.has(type)) return res.status(400).json({ error: 'Unknown command type' });
+
+  const session = await prisma.session.findUnique({
+    where: { id: req.params.id }, include: { class: { select: { teacherId: true } } },
+  });
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  if (!session.class || session.class.teacherId !== req.teacherId) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  // A pushed workspace edit is authoritative — persist it as a snapshot too, so
+  // the change survives reloads and shows up in the teacher's own view/history.
+  if (type === 'load_workspace' && payload?.workspaceJson !== undefined) {
+    await prisma.blocklySnapshot.create({
+      data: {
+        sessionId: session.id,
+        workspaceJson: payload.workspaceJson,
+        generatedCode: payload.generatedCode ?? '',
+        blockSummary: payload.blockSummary ?? '',
+      },
+    });
+  }
+
+  publishCommand(session.id, type, payload);
+  res.json({ success: true });
 });
 
 // GET /api/teacher/sessions/:id/snapshots  → blockly history (for replay scrubbing)
