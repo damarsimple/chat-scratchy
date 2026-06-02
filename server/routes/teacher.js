@@ -60,8 +60,10 @@ teacherRouter.get('/classes/:id', async (req, res) => {
         take: 1,
         select: {
           id: true, title: true, objectiveId: true, lastActiveAt: true, updatedAt: true,
-          _count: { select: { interventions: true, activityEvents: true } },
+          _count: { select: { interventions: true } },
           blocklySnapshots: { orderBy: { createdAt: 'desc' }, take: 1, select: { blockSummary: true } },
+          // Pull just the completion events to derive per-objective done-status.
+          activityEvents: { where: { type: 'objective_complete' }, select: { payload: true } },
         },
       },
     },
@@ -72,20 +74,39 @@ teacherRouter.get('/classes/:id', async (req, res) => {
     const latest = s.sessions[0] ?? null;
     const lastActiveAt = latest?.lastActiveAt ?? null;
     const online = lastActiveAt ? now - new Date(lastActiveAt).getTime() < ACTIVE_WINDOW_MS : false;
+    const completed = (latest?.activityEvents ?? []).some(
+      (e) => e.payload?.objectiveId === latest?.objectiveId,
+    );
     return {
       studentId: s.id,
       displayName: s.displayName,
       latestSessionId: latest?.id ?? null,
       objectiveId: latest?.objectiveId ?? null,
+      objectiveComplete: completed,
       lastActiveAt,
       online,
       interventionCount: latest?._count.interventions ?? 0,
-      eventCount: latest?._count.activityEvents ?? 0,
       blockSummary: latest?.blocklySnapshots[0]?.blockSummary ?? '',
     };
   });
 
-  res.json({ id: klass.id, name: klass.name, joinCode: klass.joinCode, roster });
+  // Aggregate across the class, grouped by objective: how many students are on it
+  // and how many have completed it. Powers the class overview.
+  const byObjective = {};
+  for (const r of roster) {
+    const key = r.objectiveId ?? '(none)';
+    byObjective[key] ??= { objectiveId: r.objectiveId, students: 0, completed: 0 };
+    byObjective[key].students++;
+    if (r.objectiveComplete) byObjective[key].completed++;
+  }
+  const aggregate = {
+    totalStudents: roster.length,
+    online: roster.filter((r) => r.online).length,
+    completed: roster.filter((r) => r.objectiveComplete).length,
+    byObjective: Object.values(byObjective),
+  };
+
+  res.json({ id: klass.id, name: klass.name, joinCode: klass.joinCode, roster, aggregate });
 });
 
 // GET /api/teacher/sessions/:id  → full session detail for the viewer

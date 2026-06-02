@@ -12,6 +12,7 @@ import { useProactiveAgent } from './useProactiveAgent';
 import { ConfidenceButtons } from './ConfidenceButtons';
 import { ChatTranscript, parseThinkingBlocks, renderMarkdown } from './ChatTranscript';
 import { StudentJoin } from './StudentJoin';
+import { checkObjective } from './objectives';
 import {
   loadIdentity, saveBlockly, postEvent, postIntervention, ping,
   type StudentIdentity,
@@ -135,6 +136,9 @@ function App() {
   const [confidenceSignal, setConfidenceSignal] = useState<string | null>(null);
   const [selectedObjective, setSelectedObjective] = useState(0);
   const [partnerStatus, setPartnerStatus] = useState<'idle' | 'analyzing' | 'intervening'>('idle');
+  // Objective completion banner + once-per-session "completed" guard.
+  const [objectiveComplete, setObjectiveComplete] = useState(false);
+  const completedObjectivesRef = useRef<Set<string>>(new Set());
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamingThinkingRef = useRef<HTMLPreElement>(null);
@@ -146,6 +150,11 @@ function App() {
   const blocklySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Aborts the in-flight chat LLM request when the student hits Stop.
   const chatAbortRef = useRef<AbortController | null>(null);
+  // Current objective id + session id, kept in refs so the (stable) block-change
+  // callback always reads fresh values without re-subscribing the Blockly listener.
+  const objectiveIdRef = useRef<string | undefined>(undefined);
+  const currentSessionIdRef = useRef<string | null>(null);
+  currentSessionIdRef.current = currentSessionId;
 
   const tracker = useActivityTracker();
   const interventionTracker = useInterventionTracker();
@@ -159,6 +168,15 @@ function App() {
     { id: 'pong', label: t('objective_pong_label'), description: t('objective_pong_desc') },
     { id: 'falling', label: t('objective_falling_label'), description: t('objective_falling_desc') },
   ];
+
+  // Keep the objective-id ref in sync and re-check completion against the new
+  // objective when the student switches tasks.
+  const currentObjectiveId = taskObjectives[selectedObjective]?.id;
+  useEffect(() => {
+    objectiveIdRef.current = currentObjectiveId;
+    const status = checkObjective(currentObjectiveId, currentBlocks);
+    setObjectiveComplete(status?.complete ?? false);
+  }, [currentObjectiveId, currentBlocks]);
 
   useEffect(() => {
     void loadSessionsList();
@@ -640,11 +658,28 @@ function App() {
     setCurrentBlocks(blocks);
     tracker.recordBlockChange(blocks);
     interventionTracker.resolveWithBlockChange(blocks);
+
+    // Objective completion: re-evaluate against the current objective. Fire once
+    // per (session, objective) so we don't spam events as blocks keep changing.
+    const objId = objectiveIdRef.current;
+    const status = checkObjective(objId, blocks);
+    if (status) {
+      setObjectiveComplete(status.complete);
+      const sid = currentSessionIdRef.current;
+      const key = `${sid ?? 'nosession'}:${objId}`;
+      if (status.complete && sid && !completedObjectivesRef.current.has(key)) {
+        completedObjectivesRef.current.add(key);
+        void postEvent(sid, 'objective_complete', { objectiveId: objId }).catch(() => {});
+      }
+    } else {
+      setObjectiveComplete(false);
+    }
+
     // Debounced autosave of the full workspace state to the server.
     if (blocklySaveTimer.current) clearTimeout(blocklySaveTimer.current);
     blocklySaveTimer.current = setTimeout(() => {
       const ref = blocklyRef.current;
-      const sid = currentSessionId;
+      const sid = currentSessionIdRef.current;
       if (!ref || !sid) return;
       void saveBlockly(sid, {
         workspaceJson: ref.getWorkspaceState(),
@@ -652,7 +687,7 @@ function App() {
         blockSummary: ref.getContext(),
       }).catch(() => {});
     }, 2000);
-  }, [tracker, interventionTracker, currentSessionId]);
+  }, [tracker, interventionTracker]);
 
   const handleProactiveIntervention = useCallback(async (decision: {
     action: string;
@@ -775,6 +810,9 @@ function App() {
 
       {chatTab === 'discuss' && (
         <>
+          {objectiveComplete && (
+            <div className="objective-complete-banner">{t('objective_complete')}</div>
+          )}
           <div className="chat-container" ref={chatContainerRef}>
             {isEmpty && (
               <div className="empty-state">

@@ -112,11 +112,33 @@ export interface ClassSummary {
 
 export interface RosterEntry {
   studentId: string; displayName: string; latestSessionId: string | null;
-  objectiveId: string | null; lastActiveAt: string | null; online: boolean;
-  interventionCount: number; eventCount: number; blockSummary: string;
+  objectiveId: string | null; objectiveComplete: boolean;
+  lastActiveAt: string | null; online: boolean;
+  interventionCount: number; blockSummary: string;
 }
 
-export interface ClassDetail { id: string; name: string; joinCode: string; roster: RosterEntry[]; }
+export interface ObjectiveAgg { objectiveId: string | null; students: number; completed: number; }
+export interface ClassAggregate {
+  totalStudents: number; online: number; completed: number; byObjective: ObjectiveAgg[];
+}
+
+export interface ClassDetail {
+  id: string; name: string; joinCode: string;
+  roster: RosterEntry[]; aggregate: ClassAggregate;
+}
+
+// Shared label lookup for built-in objective ids (raw id → human label).
+export const OBJECTIVE_LABELS: Record<string, string> = {
+  animation: 'Simple Animation',
+  'cat-mouse': 'Cat Chasing Mouse',
+  quiz: 'Quiz Game',
+  pong: 'Pong / Bounce',
+  falling: 'Falling Objects',
+};
+export function objectiveLabel(id: string | null | undefined): string {
+  if (!id) return '—';
+  return OBJECTIVE_LABELS[id] ?? id;
+}
 
 export interface BlocklySnapshot {
   id: string; workspaceJson: unknown; generatedCode: string; blockSummary: string; createdAt: string;

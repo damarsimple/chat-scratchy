@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { teacherApi, subscribeLive, type ClassDetail as ClassDetailData } from '../api';
+import { teacherApi, subscribeLive, objectiveLabel, type ClassDetail as ClassDetailData } from '../api';
 
 function timeAgo(iso: string | null): string {
   if (!iso) return 'never';
@@ -51,6 +51,40 @@ export function ClassDetail() {
       </header>
 
       <main className="teacher-main">
+        {/* Class aggregate overview */}
+        {data.aggregate && data.roster.length > 0 && (
+          <div className="teacher-aggregate">
+            <div className="teacher-agg-cards">
+              <div className="teacher-agg-card">
+                <div className="teacher-agg-num">{data.aggregate.totalStudents}</div>
+                <div className="teacher-agg-label">students</div>
+              </div>
+              <div className="teacher-agg-card">
+                <div className="teacher-agg-num teacher-agg-online">{data.aggregate.online}</div>
+                <div className="teacher-agg-label">active now</div>
+              </div>
+              <div className="teacher-agg-card">
+                <div className="teacher-agg-num teacher-agg-done">{data.aggregate.completed}</div>
+                <div className="teacher-agg-label">completed</div>
+              </div>
+            </div>
+            <div className="teacher-agg-objectives">
+              {data.aggregate.byObjective.map((o) => (
+                <div key={o.objectiveId ?? 'none'} className="teacher-agg-obj">
+                  <span className="teacher-agg-obj-name">{objectiveLabel(o.objectiveId)}</span>
+                  <div className="teacher-agg-bar">
+                    <div
+                      className="teacher-agg-bar-fill"
+                      style={{ width: `${o.students ? (o.completed / o.students) * 100 : 0}%` }}
+                    />
+                  </div>
+                  <span className="teacher-agg-obj-count">{o.completed}/{o.students}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {data.roster.length === 0 ? (
           <div className="teacher-empty">No students have joined yet. Share join code <strong>{data.joinCode}</strong>.</div>
         ) : (
@@ -60,6 +94,7 @@ export function ClassDetail() {
                 <th>Student</th>
                 <th>Status</th>
                 <th>Objective</th>
+                <th>Progress</th>
                 <th>Blocks</th>
                 <th>AI hints</th>
                 <th>Last active</th>
@@ -74,7 +109,12 @@ export function ClassDetail() {
                     <span className={`teacher-dot ${s.online ? 'online' : 'offline'}`} />
                     {s.online ? 'Active' : 'Idle'}
                   </td>
-                  <td>{s.objectiveId ?? '—'}</td>
+                  <td>{objectiveLabel(s.objectiveId)}</td>
+                  <td>
+                    {s.objectiveComplete
+                      ? <span className="teacher-badge-done">✅ Done</span>
+                      : <span className="teacher-muted">in progress</span>}
+                  </td>
                   <td className="teacher-roster-blocks" title={s.blockSummary}>
                     {s.blockSummary ? s.blockSummary.split('\n')[0] : '—'}
                   </td>

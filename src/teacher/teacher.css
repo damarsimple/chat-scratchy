@@ -214,3 +214,26 @@
 .teacher-outcome-helped { background: #dcfce7; color: #15803d; }
 .teacher-outcome-ignored { background: #fee2e2; color: #b91c1c; }
 .teacher-outcome-pending { background: #fef9c3; color: #a16207; }
+
+/* Class aggregate overview */
+.teacher-aggregate { margin-bottom: 24px; }
+.teacher-agg-cards { display: flex; gap: 16px; margin-bottom: 16px; }
+.teacher-agg-card {
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+  padding: 16px 24px; text-align: center; min-width: 90px;
+}
+.teacher-agg-num { font-size: 28px; font-weight: 700; }
+.teacher-agg-online { color: #22c55e; }
+.teacher-agg-done { color: #4338ca; }
+.teacher-agg-label { font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
+.teacher-agg-objectives {
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.teacher-agg-obj { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.teacher-agg-obj-name { width: 160px; flex-shrink: 0; }
+.teacher-agg-obj-count { width: 48px; text-align: right; color: #6b7280; font-size: 13px; }
+.teacher-agg-bar { flex: 1; height: 8px; background: #f3f4f6; border-radius: 999px; overflow: hidden; }
+.teacher-agg-bar-fill { height: 100%; background: linear-gradient(90deg, #4c97ff, #4338ca); border-radius: 999px; transition: width 0.3s; }
+
+.teacher-badge-done { color: #15803d; font-weight: 600; font-size: 13px; }
