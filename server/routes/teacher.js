@@ -114,7 +114,7 @@ teacherRouter.get('/sessions/:id', async (req, res) => {
   const session = await prisma.session.findUnique({
     where: { id: req.params.id },
     include: {
-      student: { select: { id: true, displayName: true } },
+      student: { select: { id: true, displayName: true, profile: true, profileUpdatedAt: true } },
       class: { select: { id: true, name: true, teacherId: true } },
       interventions: { orderBy: { createdAt: 'asc' } },
       activityEvents: { orderBy: { createdAt: 'asc' } },
@@ -138,7 +138,10 @@ teacherRouter.get('/sessions/:id', async (req, res) => {
     lang: session.lang,
     mode: session.mode,
     messages: session.messages,
-    student: session.student,
+    student: session.student ? { id: session.student.id, displayName: session.student.displayName } : null,
+    studentProfile: session.student
+      ? { profile: session.student.profile ?? '', profileUpdatedAt: session.student.profileUpdatedAt }
+      : null,
     className: session.class?.name ?? null,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,

@@ -73,6 +73,18 @@ export function SessionViewer() {
         </div>
       </header>
 
+      {data.studentProfile?.profile && (
+        <div className="teacher-memory">
+          <span className="teacher-memory-label">🧠 AI memory</span>
+          <span className="teacher-memory-text">{data.studentProfile.profile}</span>
+          {data.studentProfile.profileUpdatedAt && (
+            <span className="teacher-memory-time">
+              updated {new Date(data.studentProfile.profileUpdatedAt).toLocaleString()}
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="teacher-viewer">
         {/* Left: chat replay */}
         <section className="teacher-viewer-chat">

@@ -237,3 +237,20 @@
 .teacher-agg-bar-fill { height: 100%; background: linear-gradient(90deg, #4c97ff, #4338ca); border-radius: 999px; transition: width 0.3s; }
 
 .teacher-badge-done { color: #15803d; font-weight: 600; font-size: 13px; }
+
+/* AI memory (rolling student profile) strip in the session viewer */
+.teacher-memory {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 16px;
+  margin: 0 0 4px;
+  background: #f5f3ff;
+  border: 1px solid #ddd6fe;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.teacher-memory-label { font-weight: 600; color: #6d28d9; white-space: nowrap; }
+.teacher-memory-text { color: #374151; flex: 1; }
+.teacher-memory-time { color: #9ca3af; font-size: 11px; white-space: nowrap; }

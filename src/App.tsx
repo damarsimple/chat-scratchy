@@ -15,6 +15,7 @@ import { StudentJoin } from './StudentJoin';
 import { checkObjective } from './objectives';
 import {
   loadIdentity, saveBlockly, postEvent, postIntervention, ping,
+  getStudentProfile, saveStudentProfile,
   type StudentIdentity,
 } from './api';
 
@@ -50,6 +51,11 @@ const DEFAULT_MODEL = import.meta.env.VITE_DEFAULT_MODEL ?? 'gpt-3.5-turbo';
 const ENV_API_KEY = import.meta.env.VITE_API_KEY ?? '';
 
 const MODELS: string[] = [...new Set([DEFAULT_MODEL, 'gpt-4', 'gpt-4o'])];
+
+// Token budget for completions. Reasoning models burn most of the budget on
+// hidden reasoning before emitting the answer, so we keep this generous; the
+// inference backend is provisioned to handle large outputs.
+const MAX_TOKENS = 50000;
 
 function loadSettings(): Settings {
   const defaultModel: string = DEFAULT_MODEL;
@@ -155,6 +161,15 @@ function App() {
   const objectiveIdRef = useRef<string | undefined>(undefined);
   const currentSessionIdRef = useRef<string | null>(null);
   currentSessionIdRef.current = currentSessionId;
+  const messagesRef = useRef<Message[]>(messages);
+  messagesRef.current = messages;
+  // Rolling AI memory: the tutor's accumulated notes about this student, loaded on
+  // mount and injected into the system prompt. Kept in a ref so buildSystemContent
+  // (and the summary updater) always read the latest without re-binding.
+  const studentProfileRef = useRef<string>('');
+  // Guards/counters for the background profile summarizer.
+  const profileUpdatingRef = useRef(false);
+  const turnsSinceProfileRef = useRef(0);
 
   const tracker = useActivityTracker();
   const interventionTracker = useInterventionTracker();
@@ -182,6 +197,13 @@ function App() {
     void loadSessionsList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load this student's rolling AI memory once, so it can seed the system prompt.
+  useEffect(() => {
+    const sid = identity?.studentId;
+    if (!sid) return;
+    void getStudentProfile(sid).then((p) => { studentProfileRef.current = p.profile ?? ''; }).catch(() => {});
+  }, [identity?.studentId]);
 
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -220,7 +242,12 @@ function App() {
     // JSON and language-independent, so reliability is unaffected.
     const basePrompt = lang === 'zh' ? ZH_SYSTEM_PROMPT : EN_SYSTEM_PROMPT;
     const objDesc = taskObjectives[selectedObjective]?.description;
-    return objDesc ? basePrompt + '\n\n' + t('objective_heading') + objDesc : basePrompt;
+    let prompt = objDesc ? basePrompt + '\n\n' + t('objective_heading') + objDesc : basePrompt;
+    // Inject the rolling AI memory so the tutor "remembers" the student across
+    // sessions. It's the tutor's private notes — never recite it back verbatim.
+    const memory = studentProfileRef.current.trim();
+    if (memory) prompt += '\n\n' + t('memory_heading') + memory;
+    return prompt;
   };
 
   const startNewSession = async (): Promise<string | null> => {
@@ -390,6 +417,7 @@ function App() {
         model: settings.model,
         messages,
         stream: true,
+        max_tokens: MAX_TOKENS,
         ...(tools ? { tools } : {}),
       }),
       });
@@ -636,6 +664,14 @@ function App() {
         await updateSession(activeSessionId, allMessages);
         void loadSessionsList();
       }
+
+      // Periodically refresh the rolling AI memory (every few exchanges), so it
+      // stays current without an LLM call on every single turn.
+      turnsSinceProfileRef.current += 1;
+      if (turnsSinceProfileRef.current >= 3) {
+        turnsSinceProfileRef.current = 0;
+        void updateStudentProfile('chat_progress');
+      }
     } else {
       // Model returned nothing (tool-only loop with no text)
       setIsLoading(false);
@@ -654,6 +690,71 @@ function App() {
     chatAbortRef.current?.abort();
   };
 
+  // Rolling AI memory updater. Asks the model to fold recent activity into a
+  // compact tutoring profile (prev profile + recent chat + current blocks +
+  // objective status), then persists it. Runs in the background, best-effort —
+  // failures never disrupt the lesson. Guarded so only one runs at a time.
+  const updateStudentProfile = async (reason: string): Promise<void> => {
+    const studentId = identity?.studentId;
+    if (!studentId || profileUpdatingRef.current) return;
+    profileUpdatingRef.current = true;
+    try {
+      const recent = messagesRef.current
+        .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+        .slice(-12)
+        .map((m) => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${(m.content as string).replace(/<think>[\s\S]*?<\/think>/g, '').trim()}`)
+        .join('\n');
+      if (!recent) return;
+
+      const objId = objectiveIdRef.current;
+      const blocksCtx = blocklyRef.current?.getContext() ?? '';
+      const status = checkObjective(objId, currentBlocks);
+      const objLine = objId
+        ? `Objective "${objId}": ${status ? Math.round(status.progress * 100) + '% done' + (status.complete ? ' (COMPLETE)' : '') : 'in progress'}.`
+        : 'No objective selected.';
+
+      const sys = 'You maintain a concise tutoring memory about a young Scratch student across sessions. '
+        + 'Given the previous notes and recent activity, output an UPDATED profile in English: 2–4 short sentences '
+        + 'covering what the student understands, what they struggle with, their interests, and their working style. '
+        + 'Keep only durable, useful facts; merge rather than repeat; stay under 100 words. Output ONLY the profile text, no preamble.';
+      const userMsg = `Previous notes:\n${studentProfileRef.current || '(none yet)'}\n\n`
+        + `Recent activity (trigger: ${reason}):\n${objLine}\n\nCurrent blocks:\n${blocksCtx || '(none)'}\n\nRecent conversation:\n${recent}`;
+
+      const res = await fetch(settings.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model: settings.model,
+          messages: [{ role: 'system', content: sys }, { role: 'user', content: userMsg }],
+          stream: false,
+          // Reasoning models spend most of the budget on hidden reasoning; too small
+          // a cap starves the final answer (empty content). Give it real headroom.
+          max_tokens: MAX_TOKENS,
+        }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const raw: string = data?.choices?.[0]?.message?.content ?? '';
+      const profile = raw.replace(/<think>[\s\S]*?<\/think>/g, '').trim().slice(0, 1500);
+      if (!profile) return;
+
+      studentProfileRef.current = profile;
+      turnsSinceProfileRef.current = 0;
+      await saveStudentProfile(studentId, profile).catch(() => {});
+    } catch {
+      /* best-effort: never let memory upkeep break the lesson */
+    } finally {
+      profileUpdatingRef.current = false;
+    }
+  };
+  // Always-fresh handle so the memoized block-change callback invokes the latest
+  // closure (with current identity/settings) instead of a stale captured one.
+  const updateProfileRef = useRef(updateStudentProfile);
+  updateProfileRef.current = updateStudentProfile;
+
   const handleBlockChange = useCallback((blocks: BlockData[]) => {
     setCurrentBlocks(blocks);
     tracker.recordBlockChange(blocks);
@@ -670,6 +771,8 @@ function App() {
       if (status.complete && sid && !completedObjectivesRef.current.has(key)) {
         completedObjectivesRef.current.add(key);
         void postEvent(sid, 'objective_complete', { objectiveId: objId }).catch(() => {});
+        // Completing an objective is a strong signal — fold it into the AI memory.
+        void updateProfileRef.current('objective_complete');
       }
     } else {
       setObjectiveComplete(false);

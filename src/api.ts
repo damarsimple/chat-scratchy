@@ -83,6 +83,18 @@ export function ping(sessionId: string): Promise<{ success: boolean }> {
   return http(`/sessions/${sessionId}/ping`, { method: 'POST' });
 }
 
+// ── Rolling student profile (AI memory) ─────────────────────────────
+
+export interface StudentProfile { profile: string; profileUpdatedAt: string | null; }
+
+export function getStudentProfile(studentId: string): Promise<StudentProfile> {
+  return http(`/students/${studentId}/profile`);
+}
+
+export function saveStudentProfile(studentId: string, profile: string): Promise<StudentProfile> {
+  return http(`/students/${studentId}/profile`, { method: 'PUT', body: JSON.stringify({ profile }) });
+}
+
 // ── Teacher API ─────────────────────────────────────────────────────
 
 export interface TeacherInfo { id: string; email: string; name: string; }
@@ -154,6 +166,7 @@ export interface TeacherSession {
   id: string; title: string; objectiveId: string | null; lang: string; mode: string;
   messages: ChatMessage[];
   student: { id: string; displayName: string } | null;
+  studentProfile: { profile: string; profileUpdatedAt: string | null } | null;
   className: string | null;
   createdAt: string; updatedAt: string; lastActiveAt: string;
   latestWorkspace: BlocklySnapshot | null;

@@ -140,8 +140,8 @@ async function callWatchdogAgent(
         stream: false,
         // Reasoning models spend max_tokens on reasoning_content before the JSON
         // decision; too low a cap starves the output and the watchdog silently
-        // no-ops (parse fails → null). Leave ample headroom.
-        max_tokens: 8192,
+        // no-ops (parse fails → null). The backend can handle large budgets.
+        max_tokens: 50000,
       }),
     });
     if (!res.ok) return null;

@@ -41,6 +41,10 @@ model Student {
   // Opaque token stored in the student's localStorage for re-identification (no password).
   clientToken String   @unique
   createdAt   DateTime @default(now())
+  // Rolling AI-curated tutoring memory: a concise narrative the tutor maintains
+  // about this student across sessions (strengths, struggles, interests, style).
+  profile          String    @default("")
+  profileUpdatedAt DateTime?
 
   classId String
   class   Class  @relation(fields: [classId], references: [id], onDelete: Cascade)

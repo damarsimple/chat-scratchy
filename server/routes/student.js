@@ -41,6 +41,33 @@ studentRouter.post('/join', async (req, res) => {
   });
 });
 
+// GET /api/students/:id/profile  → the rolling AI memory for this student
+studentRouter.get('/students/:id/profile', async (req, res) => {
+  const student = await prisma.student.findUnique({
+    where: { id: req.params.id },
+    select: { profile: true, profileUpdatedAt: true },
+  });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  res.json({ profile: student.profile ?? '', profileUpdatedAt: student.profileUpdatedAt });
+});
+
+// PUT /api/students/:id/profile  { profile }  → replace the rolling AI memory
+studentRouter.put('/students/:id/profile', async (req, res) => {
+  const { profile } = req.body ?? {};
+  if (typeof profile !== 'string') return res.status(400).json({ error: 'profile (string) required' });
+  try {
+    const student = await prisma.student.update({
+      where: { id: req.params.id },
+      // Keep memory bounded so it can't grow without limit across many sessions.
+      data: { profile: profile.slice(0, 2000), profileUpdatedAt: new Date() },
+      select: { profile: true, profileUpdatedAt: true },
+    });
+    res.json({ profile: student.profile, profileUpdatedAt: student.profileUpdatedAt });
+  } catch {
+    res.status(404).json({ error: 'Student not found' });
+  }
+});
+
 // GET /api/sessions?studentId=...  → that student's sessions (list view)
 studentRouter.get('/sessions', async (req, res) => {
   const { studentId } = req.query;
