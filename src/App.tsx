@@ -144,6 +144,8 @@ function App() {
   const llmBusyRef = useRef(false);
   // Debounce timer for blockly autosave.
   const blocklySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Aborts the in-flight chat LLM request when the student hits Stop.
+  const chatAbortRef = useRef<AbortController | null>(null);
 
   const tracker = useActivityTracker();
   const interventionTracker = useInterventionTracker();
@@ -349,14 +351,19 @@ function App() {
   const streamResponse = async (
     messages: Message[],
     tools: unknown,
+    signal?: AbortSignal,
   ): Promise<{
     content: string;
     thinking: string;
     toolCalls: { id: string; function: { name: string; arguments: string } }[];
     error?: string;
+    aborted?: boolean;
   }> => {
-    const response = await fetch(settings.endpoint, {
+    let response: Response;
+    try {
+      response = await fetch(settings.endpoint, {
       method: 'POST',
+      signal: signal ?? null,
       headers: {
         'Content-Type': 'application/json',
         ...(settings.apiKey ? { 'Authorization': `Bearer ${settings.apiKey}` } : {}),
@@ -367,7 +374,12 @@ function App() {
         stream: true,
         ...(tools ? { tools } : {}),
       }),
-    });
+      });
+    } catch (e) {
+      // fetch itself rejects with AbortError when the student hits Stop.
+      if ((e as Error)?.name === 'AbortError') return { content: '', thinking: '', toolCalls: [], aborted: true };
+      return { content: '', thinking: '', toolCalls: [], error: (e as Error)?.message ?? 'Network error' };
+    }
 
     if (!response.ok) {
       return { content: '', thinking: '', toolCalls: [], error: `API error: ${response.status}` };
@@ -384,6 +396,7 @@ function App() {
     let accumulatedThinking = '';
     const toolCallAccum: Record<number, { id: string; function: { name: string; arguments: string } }> = {};
 
+    let streamAborted = false;
     const readChunk = (): Promise<boolean> => {
       return new Promise(resolve => {
         reader.read().then(({ done, value }) => {
@@ -434,6 +447,10 @@ function App() {
           }
 
           resolve(false);
+        }).catch((e) => {
+          // Reader rejects with AbortError mid-stream when the student hits Stop.
+          if ((e as Error)?.name === 'AbortError') streamAborted = true;
+          resolve(true);
         });
       });
     };
@@ -444,13 +461,15 @@ function App() {
     }
 
     const toolCalls = Object.values(toolCallAccum).filter(tc => tc.id);
-    return { content: accumulatedContent, thinking: accumulatedThinking, toolCalls };
+    return { content: accumulatedContent, thinking: accumulatedThinking, toolCalls, aborted: streamAborted };
   };
 
   const handleSend = async (text?: string): Promise<void> => {
     const trimmedInput = (text ?? input).trim();
     if (trimmedInput === '' || llmBusyRef.current) return;
     llmBusyRef.current = true;
+    const abortController = new AbortController();
+    chatAbortRef.current = abortController;
     try {
 
     let activeSessionId = currentSessionId;
@@ -506,21 +525,28 @@ function App() {
     let savedContent = '';
     let savedThinking = '';
     let error: string | undefined;
-    let retries = 0;
+    let aborted = false;
+    // Each pass that returns tool_calls is one "round": the model acts on the
+    // workspace, we run the tools, then loop so it can react. Cap the rounds so a
+    // misbehaving model can't loop forever.
+    const MAX_TOOL_ROUNDS = 5;
+    let toolRounds = 0;
 
-    while (retries < 5) {
-      retries++;
+    while (true) {
       setStreamingContent('');
       setStreamingThinking('');
 
-      const result = await streamResponse(currentMessages, tools);
+      // Once the round cap is hit, make a final call with NO tools so the model is
+      // forced to produce a text answer instead of requesting yet more tool calls
+      // (otherwise we'd exit with whatever partial text we happened to have).
+      const roundTools = toolRounds >= MAX_TOOL_ROUNDS ? undefined : tools;
+      const result = await streamResponse(currentMessages, roundTools, abortController.signal);
 
-      if (result.error) {
-        error = result.error;
-        break;
-      }
+      if (result.aborted) { aborted = true; finalContent = result.content; finalThinking = result.thinking; break; }
+      if (result.error) { error = result.error; break; }
 
       if (result.toolCalls.length > 0) {
+        toolRounds++;
         // Save any text that came alongside the tool calls — it's the real response.
         const trimmedContent = result.content.trim();
         if (trimmedContent.length > 3) { savedContent = trimmedContent; savedThinking = result.thinking; }
@@ -553,7 +579,22 @@ function App() {
       break;
     }
 
-    if (error) {
+    if (aborted) {
+      // Student stopped generation: keep whatever text streamed in, mark it, and
+      // persist so the partial turn isn't lost.
+      setIsLoading(false);
+      setStreamingContent('');
+      setStreamingThinking('');
+      const partial = (finalContent || savedContent).trim();
+      const stoppedNote = lang === 'zh' ? '（已停止）' : '(stopped)';
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: partial ? `${partial}\n\n_${stoppedNote}_` : `_${stoppedNote}_`,
+      };
+      const allMessages = [...currentMessages, assistantMessage];
+      setMessages(allMessages);
+      if (activeSessionId !== null) { await updateSession(activeSessionId, allMessages); void loadSessionsList(); }
+    } else if (error) {
       setIsLoading(false);
       setStreamingContent('');
       setStreamingThinking('');
@@ -587,7 +628,12 @@ function App() {
 
     } finally {
       llmBusyRef.current = false;
+      chatAbortRef.current = null;
     }
+  };
+
+  const stopGeneration = (): void => {
+    chatAbortRef.current?.abort();
   };
 
   const handleBlockChange = useCallback((blocks: BlockData[]) => {
@@ -796,15 +842,27 @@ function App() {
                 onKeyDown={handleKeyDown}
                 rows={1}
               />
-              <button
-                className="send-btn"
-                onClick={(): void => { void handleSend(); }}
-                disabled={isLoading || input.trim() === ''}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-                </svg>
-              </button>
+              {isLoading ? (
+                <button
+                  className="send-btn stop-btn"
+                  onClick={stopGeneration}
+                  title={lang === 'zh' ? '停止' : 'Stop'}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  className="send-btn"
+                  onClick={(): void => { void handleSend(); }}
+                  disabled={input.trim() === ''}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
         </>

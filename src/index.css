@@ -587,6 +587,14 @@ textarea::placeholder {
   box-shadow: none;
 }
 
+/* Stop button (shown while the AI is generating) */
+.send-btn.stop-btn {
+  background: #ef4444;
+}
+.send-btn.stop-btn:hover {
+  background: #dc2626;
+}
+
 .empty-state {
   display: flex;
   flex-direction: column;
