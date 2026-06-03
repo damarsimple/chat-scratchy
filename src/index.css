@@ -252,19 +252,7 @@ body {
   align-items: center;
   justify-content: space-between;
 }
-.scratch-sprite-cog {
-  border: 1px solid #A5D6A7;
-  background: #fff;
-  color: #558B2F;
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: none;
-  cursor: pointer;
-}
-.scratch-sprite-cog.active { background: #C8E6C9; }
+.scratch-stage-mouse { font-size: 10px; font-weight: 600; color: #9AA5A0; letter-spacing: 0; }
 
 /* Stage overlay wrapper holds the canvas + speech bubble + ask input */
 .scratch-stage-wrap { position: relative; width: 300px; height: 300px; }
@@ -321,57 +309,62 @@ body {
   cursor: pointer;
 }
 
-/* Sprite settings panel */
-.scratch-sprite-settings {
+/* Scratch-style sprite pane (persistent, below the stage) */
+.scratch-sprite-pane {
   width: 100%;
   margin-top: 8px;
   background: #fff;
-  border: 1px solid #C8E6C9;
-  border-radius: 8px;
-  padding: 8px;
+  border: 1px solid #D9E3DF;
+  border-radius: 10px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
-.scratch-ss-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  font-weight: 600;
-  color: #558B2F;
+.ssp-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ssp-thumb {
+  width: 40px; height: 40px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; line-height: 1;
+  background: #F1F8E9; border: 1px solid #D9E3DF; border-radius: 8px;
 }
-.scratch-ss-row label { text-transform: none; letter-spacing: 0; }
-.scratch-ss-row input[type=number] {
-  width: 56px;
-  border: 1px solid #C8E6C9;
-  border-radius: 6px;
-  padding: 3px 6px;
-  font-size: 12px;
+.ssp-fields { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.ssp-field { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: #575E75; }
+.ssp-field label { letter-spacing: 0; text-transform: none; }
+.ssp-name { color: #1f2937; }
+.ssp-val { min-width: 28px; color: #1f2937; }
+.ssp-field input[type=number] {
+  width: 52px; border: 1px solid #C9D2CE; border-radius: 14px;
+  padding: 3px 8px; font-size: 12px; text-align: center; color: #1f2937;
 }
-.scratch-ss-costumes { gap: 4px; }
-.scratch-ss-costume {
-  width: 34px; height: 34px;
-  border: 2px solid transparent;
-  border-radius: 8px;
-  background: #F1F8E9;
-  font-size: 18px;
-  cursor: pointer;
-  line-height: 1;
+.ssp-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.ssp-show { display: inline-flex; border: 1px solid #C9D2CE; border-radius: 14px; overflow: hidden; }
+.ssp-show button { border: none; background: #fff; padding: 3px 8px; cursor: pointer; font-size: 12px; }
+.ssp-show button.active { background: #4C97FF; }
+.ssp-dir { display: flex; align-items: center; gap: 6px; }
+.ssp-dial circle { fill: #fff; stroke: #C9D2CE; stroke-width: 1.5; }
+.ssp-dial line { stroke: #4C97FF; stroke-width: 2; stroke-linecap: round; }
+.ssp-rotrow { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #575E75; }
+.ssp-rotrow label { letter-spacing: 0; text-transform: none; }
+.ssp-rot {
+  width: 28px; height: 26px; border: 1px solid #C9D2CE; background: #fff;
+  border-radius: 6px; cursor: pointer; font-size: 14px; color: #575E75;
 }
-.scratch-ss-costume.active { border-color: #4C97FF; background: #E3F2FD; }
-.scratch-ss-rot, .scratch-ss-vis {
-  border: 1px solid #C8E6C9;
-  background: #F1F8E9;
-  border-radius: 6px;
-  padding: 3px 8px;
-  font-size: 13px;
-  cursor: pointer;
+.ssp-rot.active { background: #4C97FF; color: #fff; border-color: #4C97FF; }
+.ssp-costumes {
+  display: flex; gap: 6px; flex-wrap: wrap; padding-top: 8px;
+  border-top: 1px solid #EEF2F0;
 }
-.scratch-ss-rot.active { background: #4C97FF; color: #fff; border-color: #4C97FF; }
-.scratch-ss-vis { margin-left: auto; font-size: 11px; font-weight: 700; }
-.scratch-ss-vis.active { color: #2E7D32; }
+.ssp-costume {
+  flex-shrink: 0; width: 54px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  border: 2px solid transparent; border-radius: 8px; background: #F7FAF9;
+  padding: 4px 2px; cursor: pointer;
+}
+.ssp-costume.active { border-color: #4C97FF; background: #E8F1FF; }
+.ssp-costume-emoji { font-size: 22px; line-height: 1; }
+.ssp-costume-name { font-size: 10px; font-weight: 600; color: #575E75; }
 
 .scratch-canvas {
   border: 2px solid #A5D6A7;

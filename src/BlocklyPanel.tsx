@@ -633,7 +633,6 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
   const [blockTips, setBlockTips] = useState<Map<string, BlockTip>>(new Map());
   // Student-editable sprite appearance (costume/size/direction/rotation/visible).
   const [spriteConfig, setSpriteConfig] = useState<SpriteConfig>(defaultSpriteConfig);
-  const [showSpriteSettings, setShowSpriteSettings] = useState(false);
   // Speech bubble (say) + on-stage question prompt (ask and wait).
   const [sayText, setSayText] = useState<string | null>(null);
   const [askState, setAskState] = useState<{ question: string } | null>(null);
@@ -1426,11 +1425,7 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
         {!readOnly && <div className="scratch-stage-area">
           <div className="scratch-stage-label">
             <span>Stage</span>
-            <button
-              className={`scratch-sprite-cog ${showSpriteSettings ? 'active' : ''}`}
-              onClick={() => setShowSpriteSettings((v) => !v)}
-              title="Sprite settings"
-            >⚙ Sprite</button>
+            <span className="scratch-stage-mouse">x: {mouseCoords.x} y: {mouseCoords.y}</span>
           </div>
 
           <div className="scratch-stage-wrap">
@@ -1465,52 +1460,66 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
             )}
           </div>
 
-          {showSpriteSettings && (
-            <div className="scratch-sprite-settings">
-              <div className="scratch-ss-row scratch-ss-costumes">
-                {COSTUMES.map((c, i) => (
-                  <button
-                    key={c.name}
-                    className={`scratch-ss-costume ${spriteConfig.costume === i + 1 ? 'active' : ''}`}
-                    onClick={() => setSpriteConfig({ ...spriteConfig, costume: i + 1 })}
-                    title={c.name}
-                  >{c.emoji}</button>
-                ))}
-              </div>
-              <div className="scratch-ss-row">
-                <label>Size</label>
-                <input
-                  type="number" min={5} max={300} value={spriteConfig.size}
-                  onChange={(e) => setSpriteConfig({ ...spriteConfig, size: Math.max(5, Math.min(300, Number(e.target.value) || 0)) })}
-                />
-                <span>%</span>
-                <label>Dir</label>
-                <input
-                  type="number" min={0} max={359} value={spriteConfig.direction}
-                  onChange={(e) => setSpriteConfig({ ...spriteConfig, direction: ((Number(e.target.value) || 0) % 360 + 360) % 360 })}
-                />
-              </div>
-              <div className="scratch-ss-row">
-                <label>Rotate</label>
-                {([['all', '↻'], ['leftRight', '↔'], ['none', '⬆']] as [RotationStyle, string][]).map(([val, icon]) => (
-                  <button
-                    key={val}
-                    className={`scratch-ss-rot ${spriteConfig.rotationStyle === val ? 'active' : ''}`}
-                    onClick={() => setSpriteConfig({ ...spriteConfig, rotationStyle: val })}
-                    title={val}
-                  >{icon}</button>
-                ))}
-                <button
-                  className={`scratch-ss-vis ${spriteConfig.visible ? 'active' : ''}`}
-                  onClick={() => setSpriteConfig({ ...spriteConfig, visible: !spriteConfig.visible })}
-                >{spriteConfig.visible ? '👁 Shown' : '🚫 Hidden'}</button>
+          {/* Scratch-style sprite pane */}
+          <div className="scratch-sprite-pane">
+            <div className="ssp-top">
+              <div className="ssp-thumb" title={costumeAt(sprite.costume).name}>{costumeAt(sprite.costume).emoji}</div>
+              <div className="ssp-fields">
+                <div className="ssp-field"><label>Sprite</label><span className="ssp-name">Sprite1</span></div>
+                <div className="ssp-field"><label>x</label><span className="ssp-val">{Math.round(sprite.x)}</span></div>
+                <div className="ssp-field"><label>y</label><span className="ssp-val">{Math.round(sprite.y)}</span></div>
               </div>
             </div>
-          )}
 
-          <div className="scratch-sprite-info">
-            <span>{costumeAt(sprite.costume).emoji} {sprite.size}%</span>
-            <span>mouse: {mouseCoords.x}, {mouseCoords.y}</span>
+            <div className="ssp-controls">
+              <div className="ssp-field">
+                <label>Show</label>
+                <div className="ssp-show">
+                  <button className={spriteConfig.visible ? 'active' : ''} title="Show"
+                    onClick={() => setSpriteConfig({ ...spriteConfig, visible: true })}>👁</button>
+                  <button className={!spriteConfig.visible ? 'active' : ''} title="Hide"
+                    onClick={() => setSpriteConfig({ ...spriteConfig, visible: false })}>🚫</button>
+                </div>
+              </div>
+              <div className="ssp-field">
+                <label>Size</label>
+                <input type="number" min={5} max={300} value={spriteConfig.size}
+                  onChange={(e) => setSpriteConfig({ ...spriteConfig, size: Math.max(5, Math.min(300, Number(e.target.value) || 0)) })} />
+              </div>
+              <div className="ssp-field">
+                <label>Direction</label>
+                <div className="ssp-dir">
+                  <svg viewBox="-12 -12 24 24" className="ssp-dial" width="26" height="26">
+                    <circle cx="0" cy="0" r="11" />
+                    <line x1="0" y1="0"
+                      x2={(Math.sin(spriteConfig.direction * Math.PI / 180) * 9).toFixed(2)}
+                      y2={(-Math.cos(spriteConfig.direction * Math.PI / 180) * 9).toFixed(2)} />
+                  </svg>
+                  <input type="number" value={spriteConfig.direction}
+                    onChange={(e) => setSpriteConfig({ ...spriteConfig, direction: ((Number(e.target.value) || 0) % 360 + 360) % 360 })} />
+                </div>
+              </div>
+            </div>
+
+            <div className="ssp-rotrow">
+              <label>Rotation</label>
+              {([['all', '↻'], ['leftRight', '↔'], ['none', '•']] as [RotationStyle, string][]).map(([val, icon]) => (
+                <button key={val} className={`ssp-rot ${spriteConfig.rotationStyle === val ? 'active' : ''}`}
+                  onClick={() => setSpriteConfig({ ...spriteConfig, rotationStyle: val })} title={val}>{icon}</button>
+              ))}
+            </div>
+
+            {/* Costume strip (mini costume tab) */}
+            <div className="ssp-costumes">
+              {COSTUMES.map((c, i) => (
+                <button key={c.name}
+                  className={`ssp-costume ${spriteConfig.costume === i + 1 ? 'active' : ''}`}
+                  onClick={() => setSpriteConfig({ ...spriteConfig, costume: i + 1 })} title={c.name}>
+                  <span className="ssp-costume-emoji">{c.emoji}</span>
+                  <span className="ssp-costume-name">{c.name}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>}
       </div>
