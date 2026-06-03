@@ -35,7 +35,7 @@ declare global {
     __scratchChangeSize: (delta: number) => Promise<void>;
     __scratchSetSize: (size: number) => Promise<void>;
     __scratchWait: (seconds: number) => Promise<void>;
-    __scratchAsk: (question: string) => void;
+    __scratchAsk: (question: string) => Promise<void>;
     __scratchPlaySound: (name: string) => void;
     __scratchSwitchCostume: (num: number) => void;
     __scratchNextCostume: () => void;
@@ -100,16 +100,32 @@ interface BlockTip {
 
 // ── Sprite state ────────────────────────────────────────────────────
 
+type RotationStyle = 'all' | 'leftRight' | 'none';
+
 interface SpriteState {
   x: number;
   y: number;
   direction: number;
   size: number;
   visible: boolean;
+  costume: number;            // 1-based index into COSTUMES
+  rotationStyle: RotationStyle;
+}
+
+// The student-editable starting configuration (everything but live position).
+interface SpriteConfig {
+  costume: number;
+  size: number;
+  direction: number;
+  rotationStyle: RotationStyle;
+  visible: boolean;
+}
+function defaultSpriteConfig(): SpriteConfig {
+  return { costume: 1, size: 100, direction: 90, rotationStyle: 'all', visible: true };
 }
 
 function defaultSprite(): SpriteState {
-  return { x: 0, y: 0, direction: 90, size: 100, visible: true };
+  return { x: 0, y: 0, direction: 90, size: 100, visible: true, costume: 1, rotationStyle: 'all' };
 }
 
 // ── Helper: resolve refId → blockId ────────────────────────────────
@@ -318,17 +334,17 @@ javascriptGenerator.forBlock['scratch_playsound'] = b => `window.__scratchPlaySo
 javascriptGenerator.forBlock['scratch_switchcostume'] = b => `window.__scratchSwitchCostume(${javascriptGenerator.valueToCode(b, 'COSTUME', Order.NONE) || '1'});\n`;
 javascriptGenerator.forBlock['scratch_nextcostume'] = () => 'window.__scratchNextCostume();\n';
 javascriptGenerator.forBlock['scratch_costumenumber'] = () => ['window.__scratchCostumeNumber()', Order.MEMBER];
-javascriptGenerator.forBlock['scratch_askandwait'] = b => `window.__scratchAsk(${javascriptGenerator.valueToCode(b, 'QUESTION', Order.NONE) || '""'});\n`;
+javascriptGenerator.forBlock['scratch_askandwait'] = b => `await window.__scratchAsk(${javascriptGenerator.valueToCode(b, 'QUESTION', Order.NONE) || '""'});\n`;
 javascriptGenerator.forBlock['scratch_answer'] = () => ['window.__scratchAnswer || ""', Order.MEMBER];
 javascriptGenerator.forBlock['scratch_createclone'] = () => 'window.__scratchCreateClone();\n';
 javascriptGenerator.forBlock['scratch_deleteclone'] = () => 'window.__scratchDeleteClone();\n';
 javascriptGenerator.forBlock['scratch_broadcast'] = b => `await window.__scratchBroadcast(${javascriptGenerator.valueToCode(b, 'MESSAGE', Order.NONE) || '""'});\n`;
 
-function generateChain(b: Blockly.Block): string {
-  const next = b.nextConnection?.targetBlock();
-  if (!next) return '';
-  const code = javascriptGenerator.blockToCode(next);
-  return (typeof code === 'string' ? code : code[0]) || '';
+// Hat blocks (when-flag / when-key / when-clicked / when-receive) contribute no
+// code of their own — Blockly's scrub_ appends the chained body when we call
+// blockToCode on the hat. (Returning the chain here too would emit it twice.)
+function generateChain(_b: Blockly.Block): string {
+  return '';
 }
 javascriptGenerator.forBlock['event_whenflagclicked'] = generateChain;
 javascriptGenerator.forBlock['event_whenkeypressed'] = generateChain;
@@ -404,6 +420,117 @@ function canvasToScratch(px: number, py: number): [number, number] {
   return [px - COORD_RANGE, COORD_RANGE - py];
 }
 
+// ── Costume library ─────────────────────────────────────────────────
+// Each costume draws centered at the origin in "up" orientation, sized to the
+// `size` diameter. drawSprite handles position/rotation/flip around these.
+type Costume = { name: string; emoji: string; draw: (ctx: CanvasRenderingContext2D, size: number) => void };
+
+const COSTUMES: [Costume, ...Costume[]] = [
+  {
+    name: 'Cat', emoji: '🐱',
+    draw(ctx, size) {
+      ctx.fillStyle = '#FFB74D';
+      // ears
+      ctx.beginPath(); ctx.moveTo(-size * 0.35, -size * 0.3); ctx.lineTo(-size * 0.2, -size * 0.6); ctx.lineTo(-size * 0.05, -size * 0.3); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(size * 0.35, -size * 0.3); ctx.lineTo(size * 0.2, -size * 0.6); ctx.lineTo(size * 0.05, -size * 0.3); ctx.fill();
+      // head
+      ctx.beginPath(); ctx.arc(0, 0, size / 2, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#F57C00'; ctx.lineWidth = 2; ctx.stroke();
+      // eyes + smile
+      ctx.fillStyle = '#333';
+      ctx.beginPath(); ctx.arc(-size * 0.2, -size * 0.1, size * 0.08, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(size * 0.2, -size * 0.1, size * 0.08, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(0, size * 0.1, size * 0.12, 0, Math.PI); ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5; ctx.stroke();
+    },
+  },
+  {
+    name: 'Dog', emoji: '🐶',
+    draw(ctx, size) {
+      ctx.fillStyle = '#A1887F';
+      // floppy ears
+      ctx.beginPath(); ctx.ellipse(-size * 0.45, -size * 0.05, size * 0.16, size * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(size * 0.45, -size * 0.05, size * 0.16, size * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+      // head
+      ctx.fillStyle = '#C8A27C';
+      ctx.beginPath(); ctx.arc(0, 0, size / 2, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#8D6E63'; ctx.lineWidth = 2; ctx.stroke();
+      // muzzle, nose, eyes
+      ctx.fillStyle = '#5D4037';
+      ctx.beginPath(); ctx.arc(0, size * 0.18, size * 0.1, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#333';
+      ctx.beginPath(); ctx.arc(-size * 0.18, -size * 0.1, size * 0.07, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(size * 0.18, -size * 0.1, size * 0.07, 0, Math.PI * 2); ctx.fill();
+    },
+  },
+  {
+    name: 'Ball', emoji: '⚽',
+    draw(ctx, size) {
+      ctx.beginPath(); ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
+      ctx.fillStyle = '#EF5350'; ctx.fill(); ctx.strokeStyle = '#C62828'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-size / 2, 0); ctx.lineTo(size / 2, 0); ctx.stroke();
+      ctx.beginPath(); ctx.arc(-size * 0.18, -size * 0.18, size * 0.12, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fill();
+    },
+  },
+  {
+    name: 'Star', emoji: '⭐',
+    draw(ctx, size) {
+      const R = size * 0.55, r = size * 0.24;
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const ang = (Math.PI / 5) * i - Math.PI / 2;
+        const rad = i % 2 === 0 ? R : r;
+        const x = Math.cos(ang) * rad, y = Math.sin(ang) * rad;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#FFD54F'; ctx.fill(); ctx.strokeStyle = '#F9A825'; ctx.lineWidth = 2; ctx.stroke();
+    },
+  },
+  {
+    name: 'Arrow', emoji: '➡️',
+    draw(ctx, size) {
+      // points "up" (toward the sprite's heading)
+      ctx.fillStyle = '#4C97FF';
+      ctx.beginPath();
+      ctx.moveTo(0, -size * 0.55);
+      ctx.lineTo(size * 0.35, 0);
+      ctx.lineTo(size * 0.15, 0);
+      ctx.lineTo(size * 0.15, size * 0.5);
+      ctx.lineTo(-size * 0.15, size * 0.5);
+      ctx.lineTo(-size * 0.15, 0);
+      ctx.lineTo(-size * 0.35, 0);
+      ctx.closePath();
+      ctx.fill(); ctx.strokeStyle = '#2962FF'; ctx.lineWidth = 1.5; ctx.stroke();
+    },
+  },
+  {
+    name: 'Rocket', emoji: '🚀',
+    draw(ctx, size) {
+      // body
+      ctx.fillStyle = '#ECEFF1';
+      ctx.beginPath();
+      ctx.moveTo(0, -size * 0.6);
+      ctx.quadraticCurveTo(size * 0.3, -size * 0.1, size * 0.22, size * 0.4);
+      ctx.lineTo(-size * 0.22, size * 0.4);
+      ctx.quadraticCurveTo(-size * 0.3, -size * 0.1, 0, -size * 0.6);
+      ctx.fill(); ctx.strokeStyle = '#90A4AE'; ctx.lineWidth = 1.5; ctx.stroke();
+      // fins
+      ctx.fillStyle = '#EF5350';
+      ctx.beginPath(); ctx.moveTo(-size * 0.22, size * 0.15); ctx.lineTo(-size * 0.4, size * 0.45); ctx.lineTo(-size * 0.22, size * 0.4); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(size * 0.22, size * 0.15); ctx.lineTo(size * 0.4, size * 0.45); ctx.lineTo(size * 0.22, size * 0.4); ctx.fill();
+      // window
+      ctx.beginPath(); ctx.arc(0, -size * 0.1, size * 0.12, 0, Math.PI * 2);
+      ctx.fillStyle = '#4FC3F7'; ctx.fill(); ctx.strokeStyle = '#0288D1'; ctx.lineWidth = 1.5; ctx.stroke();
+    },
+  },
+];
+
+function costumeAt(index: number): Costume {
+  const i = ((Math.round(index) - 1) % COSTUMES.length + COSTUMES.length) % COSTUMES.length;
+  return COSTUMES[i] ?? COSTUMES[0];  // tuple guarantees [0] exists
+}
+
 function drawSprite(ctx: CanvasRenderingContext2D, s: SpriteState) {
   const w = ctx.canvas.width, h = ctx.canvas.height;
   ctx.fillStyle = '#E8F5E9'; ctx.fillRect(0, 0, w, h);
@@ -419,26 +546,29 @@ function drawSprite(ctx: CanvasRenderingContext2D, s: SpriteState) {
   ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
   if (!s.visible) return;
+
   const [px, py] = scratchToCanvas(s.x, s.y);
   const scale = s.size / 100;
   const size = Math.round(SPRITE_SIZE * scale);
+  const rad = s.direction * Math.PI / 180;
+
   ctx.save();
   ctx.translate(px, py);
-  const rad = s.direction * Math.PI / 180;
-  const len = size * 0.8;
-  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(len * Math.sin(rad), -len * Math.cos(rad));
-  ctx.strokeStyle = '#4C97FF'; ctx.lineWidth = 3; ctx.stroke();
-  ctx.beginPath(); ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
-  ctx.fillStyle = '#FFB74D'; ctx.fill(); ctx.strokeStyle = '#F57C00'; ctx.lineWidth = 2; ctx.stroke();
-  const eyeOff = size * 0.2, eyeR = size * 0.08;
-  const lookX = Math.sin(rad) * 2, lookY = -Math.cos(rad) * 2;
-  ctx.fillStyle = '#333';
-  ctx.beginPath(); ctx.arc(-eyeOff + lookX, -size * 0.1 + lookY, eyeR, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(eyeOff + lookX, -size * 0.1 + lookY, eyeR, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(0, size * 0.1, size * 0.12, 0, Math.PI); ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.fillStyle = '#FFB74D';
-  ctx.beginPath(); ctx.moveTo(-size * 0.35, -size * 0.3); ctx.lineTo(-size * 0.2, -size * 0.55); ctx.lineTo(-size * 0.05, -size * 0.3); ctx.fill();
-  ctx.beginPath(); ctx.moveTo(size * 0.35, -size * 0.3); ctx.lineTo(size * 0.2, -size * 0.55); ctx.lineTo(size * 0.05, -size * 0.3); ctx.fill();
+
+  // Faint heading indicator so direction is always legible, even when the
+  // costume itself isn't rotated (left-right / don't-rotate styles).
+  if (s.rotationStyle !== 'all') {
+    const len = size * 0.95;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(len * Math.sin(rad), -len * Math.cos(rad));
+    ctx.strokeStyle = 'rgba(76,151,255,0.5)'; ctx.lineWidth = 2; ctx.stroke();
+  }
+
+  ctx.save();
+  if (s.rotationStyle === 'all') ctx.rotate(rad);
+  else if (s.rotationStyle === 'leftRight' && Math.sin(rad) < 0) ctx.scale(-1, 1);
+  costumeAt(s.costume).draw(ctx, size);
+  ctx.restore();
+
   ctx.restore();
 }
 
@@ -501,12 +631,22 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
   const [mouseCoords, setMouseCoords] = useState({ x: 0, y: 0 });
   // blockRef → BlockTip
   const [blockTips, setBlockTips] = useState<Map<string, BlockTip>>(new Map());
+  // Student-editable sprite appearance (costume/size/direction/rotation/visible).
+  const [spriteConfig, setSpriteConfig] = useState<SpriteConfig>(defaultSpriteConfig);
+  const [showSpriteSettings, setShowSpriteSettings] = useState(false);
+  // Speech bubble (say) + on-stage question prompt (ask and wait).
+  const [sayText, setSayText] = useState<string | null>(null);
+  const [askState, setAskState] = useState<{ question: string } | null>(null);
+  const [askInput, setAskInput] = useState('');
+  const askResolverRef = useRef<((answer: string) => void) | null>(null);
 
   const workspaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const workspace = useRef<Blockly.WorkspaceSvg | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const spriteRef = useRef<SpriteState>(defaultSprite());
+  const spriteConfigRef = useRef<SpriteConfig>(defaultSpriteConfig());
+  spriteConfigRef.current = spriteConfig;
   const keysRef = useRef<Set<string>>(new Set());
   const mouseRef = useRef({ x: 0, y: 0 });
   const outputRef = useRef<string[]>([]);
@@ -544,6 +684,20 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
   }, []);
 
   useEffect(() => { renderCanvas(); }, [renderCanvas]);
+
+  // While idle, reflect the student's sprite customization on the stage live
+  // (during a run the program controls the sprite, so leave it alone).
+  useEffect(() => {
+    if (isRunning) return;
+    const s = spriteRef.current;
+    s.costume = spriteConfig.costume;
+    s.size = spriteConfig.size;
+    s.direction = spriteConfig.direction;
+    s.rotationStyle = spriteConfig.rotationStyle;
+    s.visible = spriteConfig.visible;
+    setSprite({ ...s });
+    renderCanvas();
+  }, [spriteConfig, isRunning, renderCanvas]);
 
   // ── Block description helper ─────────────────────────────────────
 
@@ -970,13 +1124,21 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
     setIsRunning(true);
     setOutput([]);
     outputRef.current = [];
-    spriteRef.current = defaultSprite();
+    setSayText(null);
+    setAskState(null);
+    askResolverRef.current = null;
+    // Start from the student's configured appearance (position centered).
+    const cfg = spriteConfigRef.current;
+    const startSprite: SpriteState = {
+      x: 0, y: 0, direction: cfg.direction, size: cfg.size,
+      visible: cfg.visible, costume: cfg.costume, rotationStyle: cfg.rotationStyle,
+    };
+    spriteRef.current = startSprite;
     renderCanvas();
-    setSprite(defaultSprite());
+    setSprite({ ...startSprite });
 
     const s = spriteRef.current;
     const sig = abort.signal;
-    let costumeNum = 1;
     window.__scratchAnswer = '';
     broadcastHandlers.current = new Map();
     spriteClickHandlers.current = [];
@@ -1033,14 +1195,17 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
 
     window.__scratchSay = (text) => {
       if (sig.aborted) throw Error('STOPPED');
-      outputRef.current = [...outputRef.current, String(text)];
-      setOutput([...outputRef.current]);
+      // Empty say() clears the bubble, matching Scratch.
+      setSayText(text === '' || text == null ? null : String(text));
     };
     window.__scratchSaySeconds = (text, secs) =>
       new Promise<void>((resolve, reject) => {
         if (sig.aborted) return reject(Error('STOPPED'));
-        outputRef.current = [...outputRef.current, String(text)]; setOutput([...outputRef.current]);
-        setTimeout(() => { if (sig.aborted) return reject(Error('STOPPED')); resolve(); }, secs * 1000);
+        setSayText(String(text));
+        setTimeout(() => {
+          if (sig.aborted) return reject(Error('STOPPED'));
+          setSayText(null); resolve();
+        }, secs * 1000);
       });
     window.__scratchWait = (seconds) =>
       new Promise<void>((resolve, reject) => {
@@ -1048,13 +1213,28 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
         const t = setTimeout(resolve, seconds * 1000);
         sig.addEventListener('abort', () => { clearTimeout(t); reject(Error('STOPPED')); });
       });
-    window.__scratchAsk = (q) => { window.__scratchAnswer = prompt(String(q)) ?? ''; };
+    // Ask and wait: show an on-stage input and pause until the student answers.
+    window.__scratchAsk = (q) =>
+      new Promise<void>((resolve, reject) => {
+        if (sig.aborted) return reject(Error('STOPPED'));
+        setAskState({ question: String(q ?? '') });
+        setAskInput('');
+        askResolverRef.current = (answer: string) => {
+          window.__scratchAnswer = answer;
+          askResolverRef.current = null;
+          setAskState(null);
+          resolve();
+        };
+        sig.addEventListener('abort', () => {
+          if (askResolverRef.current) { askResolverRef.current = null; setAskState(null); reject(Error('STOPPED')); }
+        });
+      });
     window.__scratchPlaySound = (name) => {
       outputRef.current = [...outputRef.current, `🔊 ${name}`]; setOutput([...outputRef.current]);
     };
-    window.__scratchSwitchCostume = (num) => { costumeNum = Math.max(1, Math.round(num)); };
-    window.__scratchNextCostume = () => { costumeNum++; };
-    window.__scratchCostumeNumber = () => costumeNum;
+    window.__scratchSwitchCostume = (num) => { s.costume = Math.max(1, Math.round(num)); renderCanvas(); setSprite({ ...s }); };
+    window.__scratchNextCostume = () => { s.costume = s.costume + 1; renderCanvas(); setSprite({ ...s }); };
+    window.__scratchCostumeNumber = () => ((s.costume - 1) % COSTUMES.length + COSTUMES.length) % COSTUMES.length + 1;
 
     window.__scratchBroadcast = async (msg) => {
       const handlers = broadcastHandlers.current.get(msg) ?? [];
@@ -1131,6 +1311,8 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
       window.removeEventListener('keyup', handleKeyEdgeUp);
       spriteClickHandlers.current = [];
       broadcastHandlers.current = new Map();
+      // A say bubble persists after the program finishes naturally (Scratch-like);
+      // it's only torn down on Stop (see handleStop) or by the next run/say.
       setIsRunning(false);
       abortRef.current = null;
     }
@@ -1139,7 +1321,12 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
   // Keep triggerRunRef current
   useEffect(() => { triggerRunRef.current = () => { void handleStart(); }; }, [handleStart]);
 
-  const handleStop = useCallback(() => { abortRef.current?.abort(); }, []);
+  const handleStop = useCallback(() => {
+    abortRef.current?.abort();
+    // Clear the speech bubble on Stop (the ask prompt is cleared by its own
+    // abort listener which also rejects the pending promise).
+    setSayText(null);
+  }, []);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -1237,10 +1424,92 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
         )}
 
         {!readOnly && <div className="scratch-stage-area">
-          <div className="scratch-stage-label">Stage</div>
-          <canvas ref={canvasRef} width={300} height={300} className="scratch-canvas" onMouseMove={handleCanvasMouseMove} onClick={handleCanvasClick} />
+          <div className="scratch-stage-label">
+            <span>Stage</span>
+            <button
+              className={`scratch-sprite-cog ${showSpriteSettings ? 'active' : ''}`}
+              onClick={() => setShowSpriteSettings((v) => !v)}
+              title="Sprite settings"
+            >⚙ Sprite</button>
+          </div>
+
+          <div className="scratch-stage-wrap">
+            <canvas ref={canvasRef} width={300} height={300} className="scratch-canvas" onMouseMove={handleCanvasMouseMove} onClick={handleCanvasClick} />
+            {/* Speech bubble (say / ask question), anchored to the sprite */}
+            {sprite.visible && (askState?.question ?? sayText) && (
+              <div
+                className="scratch-say-bubble"
+                style={{
+                  left: `${((sprite.x + COORD_RANGE) / (COORD_RANGE * 2)) * 100}%`,
+                  top: `${((COORD_RANGE - sprite.y) / (COORD_RANGE * 2)) * 100}%`,
+                }}
+              >
+                {askState?.question ?? sayText}
+              </div>
+            )}
+            {/* On-stage input for "ask and wait" */}
+            {askState && (
+              <form
+                className="scratch-ask-bar"
+                onSubmit={(e) => { e.preventDefault(); askResolverRef.current?.(askInput); }}
+              >
+                <input
+                  className="scratch-ask-input"
+                  value={askInput}
+                  onChange={(e) => setAskInput(e.target.value)}
+                  placeholder="Type your answer…"
+                  autoFocus
+                />
+                <button type="submit" className="scratch-ask-submit" title="Submit">✓</button>
+              </form>
+            )}
+          </div>
+
+          {showSpriteSettings && (
+            <div className="scratch-sprite-settings">
+              <div className="scratch-ss-row scratch-ss-costumes">
+                {COSTUMES.map((c, i) => (
+                  <button
+                    key={c.name}
+                    className={`scratch-ss-costume ${spriteConfig.costume === i + 1 ? 'active' : ''}`}
+                    onClick={() => setSpriteConfig({ ...spriteConfig, costume: i + 1 })}
+                    title={c.name}
+                  >{c.emoji}</button>
+                ))}
+              </div>
+              <div className="scratch-ss-row">
+                <label>Size</label>
+                <input
+                  type="number" min={5} max={300} value={spriteConfig.size}
+                  onChange={(e) => setSpriteConfig({ ...spriteConfig, size: Math.max(5, Math.min(300, Number(e.target.value) || 0)) })}
+                />
+                <span>%</span>
+                <label>Dir</label>
+                <input
+                  type="number" min={0} max={359} value={spriteConfig.direction}
+                  onChange={(e) => setSpriteConfig({ ...spriteConfig, direction: ((Number(e.target.value) || 0) % 360 + 360) % 360 })}
+                />
+              </div>
+              <div className="scratch-ss-row">
+                <label>Rotate</label>
+                {([['all', '↻'], ['leftRight', '↔'], ['none', '⬆']] as [RotationStyle, string][]).map(([val, icon]) => (
+                  <button
+                    key={val}
+                    className={`scratch-ss-rot ${spriteConfig.rotationStyle === val ? 'active' : ''}`}
+                    onClick={() => setSpriteConfig({ ...spriteConfig, rotationStyle: val })}
+                    title={val}
+                  >{icon}</button>
+                ))}
+                <button
+                  className={`scratch-ss-vis ${spriteConfig.visible ? 'active' : ''}`}
+                  onClick={() => setSpriteConfig({ ...spriteConfig, visible: !spriteConfig.visible })}
+                >{spriteConfig.visible ? '👁 Shown' : '🚫 Hidden'}</button>
+              </div>
+            </div>
+          )}
+
           <div className="scratch-sprite-info">
-            <span>🐱 {sprite.size}%</span>
+            <span>{costumeAt(sprite.costume).emoji} {sprite.size}%</span>
             <span>mouse: {mouseCoords.x}, {mouseCoords.y}</span>
           </div>
         </div>}
