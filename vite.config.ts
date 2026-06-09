@@ -9,7 +9,7 @@ export default defineConfig({
     allowedHosts: ['chat.pongpong.cc'],
     proxy: {
       '/api/chat': {
-        target: 'http://192.168.1.205:8083',
+        target: 'http://10.0.0.2:8083',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/chat/, '/v1/chat'),
       },

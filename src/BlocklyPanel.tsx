@@ -761,6 +761,14 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
     });
     workspace.current = ws;
 
+    // Dev-only hook: lets screenshot/automation tooling inject a workspace
+    // program (Blockly.serialization) into the live editor. Stripped from prod.
+    if (import.meta.env.DEV && !readOnly) {
+      (window as unknown as Record<string, unknown>).__loadScratchProgram = (json: object) => {
+        Blockly.serialization.workspaces.load(json, ws);
+      };
+    }
+
     // Context menu: "Ask AI to explain"
     const menuId = 'ai_explain_block';
     if (!Blockly.ContextMenuRegistry.registry.getItem(menuId)) {
@@ -787,7 +795,33 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
     ws.addChangeListener(handleChange);
     handleChange();
 
-    return () => { ws.removeChangeListener(handleChange); ws.dispose(); workspace.current = null; };
+    // Track the last-clicked block via native DOM events on the block SVG
+    // elements. Blockly's internal selection is unreliable for this use case
+    // because it fires selected→null immediately after clicking a block.
+    const clickTracker = { id: null as string | null };
+    const svgRoot = ws.getCanvas() as unknown as SVGElement;
+    const onPointerDown = (e: PointerEvent) => {
+      // Walk the DOM tree from the event target up to find a Blockly block
+      // (elements with a data-id attribute that corresponds to a block).
+      let target = e.target as Element | null;
+      let blockId: string | null = null;
+      while (target && target !== svgRoot) {
+        const id = target.getAttribute?.('data-id');
+        if (id && ws.getBlockById(id)) { blockId = id; break; }
+        target = target.parentElement;
+      }
+      if (blockId) {
+        clickTracker.id = blockId;
+        console.log('[BlocklyPanel] DOM block click:', blockId);
+      } else {
+        clickTracker.id = null;
+      }
+    };
+    svgRoot.addEventListener('pointerdown', onPointerDown);
+    // Store the tracker on the workspace so getSelectedBlockId can read it.
+    (ws as unknown as { _clickTracker: { id: string | null } })._clickTracker = clickTracker;
+
+    return () => { svgRoot.removeEventListener('pointerdown', onPointerDown); ws.removeChangeListener(handleChange); ws.dispose(); workspace.current = null; };
   // Mount-only: readOnly is fixed per panel instance.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -883,10 +917,17 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
 
     // ── Raw-blockId control (teacher→student live ops) ─────────────
     getSelectedBlockId() {
+      let id: string | null = null;
       const sel = Blockly.getSelected();
-      // Selected item is a block when it exposes an id we can resolve.
-      const id = (sel as { id?: string } | null)?.id;
-      return id && workspace.current?.getBlockById(id) ? id : null;
+      if (sel) id = (sel as { id?: string }).id ?? null;
+      // Fallback: use the click tracker when Blockly.getSelected() isn't set.
+      if (!id || !workspace.current?.getBlockById(id)) {
+        const ws = workspace.current as unknown as { _clickTracker?: { id: string | null } };
+        id = ws._clickTracker?.id ?? null;
+        if (id && !workspace.current?.getBlockById(id)) id = null;
+      }
+      console.log('[BlocklyPanel] getSelectedBlockId =>', id);
+      return id;
     },
     highlightBlockId(blockId: string | null) {
       const ws = workspace.current;
@@ -1116,8 +1157,19 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
   // ── Main run loop ────────────────────────────────────────────────
 
   const handleStart = useCallback(async () => {
+    console.log('[BlocklyPanel] handleStart called, isRunning:', isRunning);
     const ws = workspace.current;
-    if (!ws || isRunning) return;
+    if (!ws || isRunning) {
+      console.log('[BlocklyPanel] handleStart bail: workspace=', !!ws, 'isRunning=', isRunning);
+      return;
+    }
+
+    const topBlocks = ws.getTopBlocks(true);
+    if (topBlocks.length === 0) {
+      console.log('[BlocklyPanel] no top blocks — nothing to run');
+      return;
+    }
+
     const abort = new AbortController();
     abortRef.current = abort;
     setIsRunning(true);
@@ -1257,7 +1309,7 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
     // Blockly v12 requires init() before any blockToCode() call
     javascriptGenerator.init(ws);
 
-    const topBlocks = ws.getTopBlocks(true);
+    console.log('[BlocklyPanel] topBlocks count:', topBlocks.length, 'types:', topBlocks.map(b => b.type));
     const flagScripts: Array<() => Promise<void>> = [];
     const keyScripts = new Map<string, Array<() => Promise<void>>>();
     const anyKeyScripts: Array<() => Promise<void>> = [];
@@ -1265,7 +1317,10 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
     for (const block of topBlocks) {
       const codeResult = javascriptGenerator.blockToCode(block);
       const bodyCode = typeof codeResult === 'string' ? codeResult : (codeResult[0] ?? '');
-      if (!bodyCode.trim()) continue;
+      if (!bodyCode.trim()) {
+        console.log('[BlocklyPanel] block', block.type, 'produced empty code');
+        continue;
+      }
       const runner = new AsyncFunction(bodyCode);
       switch (block.type) {
         case 'event_whenflagclicked': flagScripts.push(runner); break;
@@ -1285,6 +1340,8 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
         default: break;
       }
     }
+
+    console.log('[BlocklyPanel] flagScripts:', flagScripts.length, 'keyScripts:', keyScripts.size, 'spriteClick:', spriteClickHandlers.current.length, 'broadcasts:', broadcastHandlers.current.size);
 
     const keysCurrentlyDown = new Set<string>();
     const handleKeyEdgeDown = (e: KeyboardEvent) => {
@@ -1306,6 +1363,7 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
     try {
       await Promise.all([keepAlive, ...flagScripts.map(fn => fn().catch(handleErr))]);
     } finally {
+      console.log('[BlocklyPanel] handleStart finally: setting isRunning=false');
       window.removeEventListener('keydown', handleKeyEdgeDown);
       window.removeEventListener('keyup', handleKeyEdgeUp);
       spriteClickHandlers.current = [];
@@ -1321,7 +1379,9 @@ export const BlocklyPanel = forwardRef<BlocklyPanelHandle, {
   useEffect(() => { triggerRunRef.current = () => { void handleStart(); }; }, [handleStart]);
 
   const handleStop = useCallback(() => {
+    console.log('[BlocklyPanel] handleStop called, abortRef:', !!abortRef.current);
     abortRef.current?.abort();
+    console.log('[BlocklyPanel] handleStop: aborted, isRunning should become false in finally');
     // Clear the speech bubble on Stop (the ask prompt is cleared by its own
     // abort listener which also rejects the pending promise).
     setSayText(null);

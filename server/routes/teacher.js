@@ -237,13 +237,18 @@ teacherRouter.get('/sessions/:id', async (req, res) => {
 // student's screen. Teacher must own the session's class.
 teacherRouter.post('/sessions/:id/command', async (req, res) => {
   const { type, payload } = req.body ?? {};
+  console.log('[teacher] POST /sessions/:id/command', { sessionId: req.params.id, type, payload, teacherId: req.teacherId });
   if (!COMMAND_TYPES.has(type)) return res.status(400).json({ error: 'Unknown command type' });
 
   const session = await prisma.session.findUnique({
     where: { id: req.params.id }, include: { class: { select: { teacherId: true } } },
   });
-  if (!session) return res.status(404).json({ error: 'Session not found' });
+  if (!session) {
+    console.warn('[teacher] command: session not found', req.params.id);
+    return res.status(404).json({ error: 'Session not found' });
+  }
   if (!session.class || session.class.teacherId !== req.teacherId) {
+    console.warn('[teacher] command: forbidden', { sessionId: req.params.id, teacherId: req.teacherId, classTeacherId: session.class?.teacherId });
     return res.status(403).json({ error: 'Forbidden' });
   }
 
@@ -260,7 +265,9 @@ teacherRouter.post('/sessions/:id/command', async (req, res) => {
     });
   }
 
+  console.log('[teacher] publishing command', { sessionId: session.id, type });
   publishCommand(session.id, type, payload);
+  console.log('[teacher] command published, sending response');
   res.json({ success: true });
 });
 

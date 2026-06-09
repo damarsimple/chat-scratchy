@@ -2,11 +2,8 @@ import { useState } from 'react';
 import { joinClass, ApiError, type StudentIdentity } from './api';
 import { useI18n } from './i18n';
 
-// Gate shown before the student workspace loads when there's no saved identity.
-// Student enters a class code + display name to join their teacher's class.
 export function StudentJoin({ onJoined }: { onJoined: (id: StudentIdentity) => void }) {
-  const { lang } = useI18n();
-  const zh = lang === 'zh';
+  const { t, lang, toggleLang } = useI18n();
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
@@ -21,9 +18,9 @@ export function StudentJoin({ onJoined }: { onJoined: (id: StudentIdentity) => v
       onJoined(id);
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
-        setError(zh ? '找不到這個課程代碼' : 'Class code not found');
+        setError(t('Class code not found'));
       } else {
-        setError(zh ? '加入失敗，請再試一次' : 'Could not join, please try again');
+        setError(t('Could not join, please try again'));
       }
     } finally {
       setBusy(false);
@@ -33,11 +30,12 @@ export function StudentJoin({ onJoined }: { onJoined: (id: StudentIdentity) => v
   return (
     <div className="join-gate">
       <div className="join-card">
-        <h1>{zh ? '歡迎來到 Scratchy！' : 'Welcome to Scratchy!'}</h1>
-        <p>{zh ? '請輸入老師給你的課程代碼和你的名字。' : 'Enter the class code from your teacher and your name.'}</p>
+        <button className="join-lang-btn" onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中'}</button>
+        <h1>{t('Welcome to Scratchy!')}</h1>
+        <p>{t('Enter the class code from your teacher and your name.')}</p>
         <input
           className="join-input"
-          placeholder={zh ? '課程代碼' : 'Class code'}
+          placeholder={t('Class code')}
           value={code}
           onChange={(e) => setCode(e.target.value.toUpperCase())}
           maxLength={8}
@@ -45,7 +43,7 @@ export function StudentJoin({ onJoined }: { onJoined: (id: StudentIdentity) => v
         />
         <input
           className="join-input"
-          placeholder={zh ? '你的名字' : 'Your name'}
+          placeholder={t('Your name')}
           value={name}
           onChange={(e) => setName(e.target.value)}
           maxLength={60}
@@ -53,7 +51,7 @@ export function StudentJoin({ onJoined }: { onJoined: (id: StudentIdentity) => v
         />
         {error && <div className="join-error">{error}</div>}
         <button className="join-btn" onClick={() => void submit()} disabled={busy || !code.trim() || !name.trim()}>
-          {busy ? (zh ? '加入中…' : 'Joining…') : (zh ? '開始學習' : 'Start learning')}
+          {busy ? t('Joining…') : t('Start learning')}
         </button>
       </div>
     </div>

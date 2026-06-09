@@ -1,13 +1,18 @@
-add button => debug on chat container
-d
+ideas (not yet implemented):
 
-debug, discuss, and something else? 
+- add a "debug" button on the chat container → debug tab alongside "discuss"
+- modes: learning mode (free chat) | task mode (blockly + objectives)
+  -> maybe add objectives here e.g "move sprite 5 steps"
+- actively suggest debugging from the AI tutor when user is stuck for a while
+  -> partial: the watchdog (useProactiveAgent) already intervenes when stuck
+  -> but there's no dedicated "debug" tab / button in the chat UI
+- even suggest taking a break when the student is stuck for a long time
+  -> already supported: the watchdog can set suggestBreak=true
 
-mode 1 = learning mode
-mode 2 = task mode (maybe add objectives here e.g move sprite 5 steps.)
-
-actively suggest debugging when user is stuck for a while, or when the code is not working as expected. 
-
-even suggesting get rest or take a break when user is stuck for a while.
+currently implemented:
+- chat tab: only "discuss" (no debug tab)
+- mode toggle: learning / task (working)
+- proactive intervention: watchdog checks every 30s, LLM decides whether to intervene
+- break suggestion: supported in the watchdog system prompt
 
 not passive but active

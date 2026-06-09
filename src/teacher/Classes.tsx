@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { teacherApi, type ClassSummary } from '../api';
 import { useTeacherAuth } from './TeacherAuth';
+import { useI18n } from '../i18n';
 
-// Teacher landing page: list of classes + create a new one.
 export function Classes() {
   const { teacher, logout } = useTeacherAuth();
+  const { t, lang, toggleLang } = useI18n();
   const [classes, setClasses] = useState<ClassSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
@@ -33,10 +34,11 @@ export function Classes() {
   return (
     <div className="teacher-shell">
       <header className="teacher-topbar">
-        <h1 className="teacher-topbar-title">📘 Scratchy Dashboard</h1>
+        <h1 className="teacher-topbar-title">📘 {t('Scratchy Dashboard')}</h1>
         <div className="teacher-topbar-right">
+          <button className="teacher-link-btn" onClick={toggleLang} style={{ fontSize: 13, fontWeight: 700 }}>{lang === 'zh' ? 'EN' : '中'}</button>
           <span className="teacher-whoami">{teacher?.name}</span>
-          <button className="teacher-link-btn" onClick={() => void logout()}>Log out</button>
+          <button className="teacher-link-btn" onClick={() => void logout()}>{t('Log out')}</button>
         </div>
       </header>
 
@@ -44,29 +46,29 @@ export function Classes() {
         <div className="teacher-create-row">
           <input
             className="teacher-input"
-            placeholder="New class name (e.g. Grade 5 — Period 2)"
+            placeholder={t('New class name') + ' (e.g. Grade 5 — Period 2)'}
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void createClass(); }}
           />
           <button className="teacher-btn-primary" onClick={() => void createClass()} disabled={creating || !newName.trim()}>
-            + Create class
+            + {t('Create class')}
           </button>
         </div>
 
         {loading ? (
-          <div className="teacher-loading">Loading classes…</div>
+          <div className="teacher-loading">{t('Loading classes…')}</div>
         ) : classes.length === 0 ? (
-          <div className="teacher-empty">No classes yet. Create one above, then share its join code with students.</div>
+          <div className="teacher-empty">{t('No classes yet.')} {t('Create one above, then share its join code with students.')}</div>
         ) : (
           <div className="teacher-class-grid">
             {classes.map((c) => (
               <Link key={c.id} to={`/teacher/classes/${c.id}`} className="teacher-class-card">
                 <div className="teacher-class-name">{c.name}</div>
-                <div className="teacher-class-code">Join code: <strong>{c.joinCode}</strong></div>
+                <div className="teacher-class-code">{t('Join code:')} <strong>{c.joinCode}</strong></div>
                 <div className="teacher-class-stats">
-                  <span>{c.studentCount} students</span>
-                  <span>{c.sessionCount} sessions</span>
+                  <span>{c.studentCount} {t('students')}</span>
+                  <span>{c.sessionCount} {t('sessions')}</span>
                 </div>
               </Link>
             ))}

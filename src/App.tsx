@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback, type KeyboardEvent } from 're
 import type { JSX } from 'react';
 import { useI18n } from './i18n';
 import EN_SYSTEM_PROMPT from './en-sys-prompt.txt?raw';
-import ZH_SYSTEM_PROMPT from './zh-sys-prompt.txt?raw';
 import { BlocklyPanel } from './BlocklyPanel';
 import type { BlocklyPanelHandle } from './BlocklyPanel';
 import type { BlockData } from './scratchPatterns';
@@ -268,25 +267,33 @@ function App() {
       teacherActivityTimer.current = setTimeout(() => setTeacherActivity(null), 6000);
     };
     const unsub = subscribeCommands(currentSessionId, (cmd: TeacherCommand) => {
+      console.log('[App] subscribeCommands received:', cmd);
       const ref = blocklyRef.current;
-      if (!ref) return;
+      if (!ref) {
+        console.warn('[App] subscribeCommands: blocklyRef.current is null');
+        return;
+      }
       const zh = langRef.current === 'zh';
       const p = cmd.payload as { blockId?: string; message?: string; workspaceJson?: object };
       switch (cmd.type) {
         case 'highlight':
+          console.log('[App] applying highlight', p.blockId);
           ref.highlightBlockId(p.blockId ?? null);
           if (p.blockId && p.message) ref.showBlockTipById(p.blockId, p.message);
           flash(zh ? '👩‍🏫 老師正在指出一個積木' : '👩‍🏫 Your teacher is pointing at a block');
           break;
         case 'tip':
+          console.log('[App] applying tip', p.blockId, p.message);
           if (p.blockId && p.message) ref.showBlockTipById(p.blockId, p.message);
           flash(zh ? '👩‍🏫 老師留了一個提示' : '👩‍🏫 Your teacher left a tip');
           break;
         case 'clear':
+          console.log('[App] applying clear');
           ref.highlightBlockId(null);
           ref.clearBlockTips();
           break;
         case 'load_workspace':
+          console.log('[App] applying load_workspace');
           if (p.workspaceJson) ref.loadWorkspaceState(p.workspaceJson);
           flash(zh ? '👩‍🏫 老師更新了你的積木' : '👩‍🏫 Your teacher updated your blocks');
           break;
@@ -305,14 +312,18 @@ function App() {
   };
 
   const buildSystemContent = (): string => {
-    // Pick the prompt by display language so the model replies in that language
-    // directly — no separate translation round-trip. Tool-call args are structured
-    // JSON and language-independent, so reliability is unaffected.
-    const basePrompt = lang === 'zh' ? ZH_SYSTEM_PROMPT : EN_SYSTEM_PROMPT;
+    // Always use the English prompt for stable instruction parsing and tool calling.
+    // When zh mode is active, replace the language rule inline so the model
+    // sees the override at the same priority level as the original instruction.
+    let prompt = EN_SYSTEM_PROMPT;
+    if (lang === 'zh') {
+      prompt = prompt.replace(
+        '**You must ALWAYS respond in English, without exception.**',
+        '**You must ALWAYS respond in Traditional Chinese (繁體中文), without exception.**',
+      );
+    }
     const objDesc = taskObjectives[selectedObjective]?.description;
-    let prompt = objDesc ? basePrompt + '\n\n' + t('objective_heading') + objDesc : basePrompt;
-    // Inject the rolling AI memory so the tutor "remembers" the student across
-    // sessions. It's the tutor's private notes — never recite it back verbatim.
+    if (objDesc) prompt += '\n\n' + t('objective_heading') + objDesc;
     const memory = studentProfileRef.current.trim();
     if (memory) prompt += '\n\n' + t('memory_heading') + memory;
     return prompt;

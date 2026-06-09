@@ -1,5 +1,7 @@
 # Multi-Sprite Plan
 
+**Status: NOT IMPLEMENTED** — The current codebase uses a single sprite (`spriteRef: RefObject<SpriteState>`). This doc outlines a future multi-sprite refactor.
+
 ## Phase 1 — Core Multi-Sprite
 
 ### Sprite State

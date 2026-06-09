@@ -4,6 +4,7 @@ import { BlocklyPanel, type BlocklyPanelHandle } from '../BlocklyPanel';
 import { ChatTranscript } from '../ChatTranscript';
 import { Timeline } from './Timeline';
 import { teacherApi, subscribeLive, type TeacherSession } from '../api';
+import { useI18n } from '../i18n';
 
 type Tab = 'workspace' | 'code' | 'timeline';
 
@@ -12,6 +13,7 @@ type Tab = 'workspace' | 'code' | 'timeline';
 // Subscribes to the session SSE stream for near-real-time updates.
 export function SessionViewer() {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const { lang, toggleLang } = useI18n();
   const [data, setData] = useState<TeacherSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('workspace');
@@ -69,23 +71,33 @@ export function SessionViewer() {
 
   // ── Live control: push commands to the student's screen ──────────────
   const flashControl = (msg: string) => {
+    console.log('[SessionViewer] flashControl:', msg);
     setControlMsg(msg);
-    setTimeout(() => setControlMsg((m) => (m === msg ? null : m)), 2500);
+    setTimeout(() => setControlMsg((m) => (m === msg ? null : m)), 4000);
   };
   const send = (type: 'highlight' | 'tip' | 'clear' | 'load_workspace', payload?: unknown) => {
-    if (!sessionId) return;
-    teacherApi.sendCommand(sessionId, type, payload).catch((e) => flashControl(`Failed: ${e.message ?? e}`));
+    if (!sessionId) { console.warn('[SessionViewer] send: no sessionId'); return; }
+    console.log('[SessionViewer] send:', type, JSON.stringify(payload));
+    teacherApi.sendCommand(sessionId, type, payload)
+      .then((res) => console.log('[SessionViewer] send ok:', type, res))
+      .catch((e) => {
+        console.error('[SessionViewer] send failed:', type, e);
+        flashControl(`Failed: ${e.message ?? e}`);
+      });
   };
   const highlightSelected = () => {
     const id = blocklyRef.current?.getSelectedBlockId();
+    console.log('[SessionViewer] highlightSelected: getSelectedBlockId() =>', id);
     if (!id) return flashControl('Turn on Edit mode, then click a block to select it.');
     send('highlight', { blockId: id });
     flashControl('Highlighted on student’s screen.');
   };
   const tipSelected = () => {
     const id = blocklyRef.current?.getSelectedBlockId();
+    console.log('[SessionViewer] tipSelected: getSelectedBlockId() =>', id);
     if (!id) return flashControl('Turn on Edit mode, then click a block to select it.');
     const message = window.prompt('Tip to show on the student’s block:');
+    console.log('[SessionViewer] tipSelected: prompt returned:', message);
     if (!message) return;
     send('tip', { blockId: id, message });
     flashControl('Tip sent.');
@@ -113,6 +125,7 @@ export function SessionViewer() {
           {data.student?.displayName ?? 'Student'} · {data.className ?? ''}
         </h1>
         <div className="teacher-topbar-right">
+          <button className="teacher-link-btn" onClick={toggleLang} style={{ fontSize: 13, fontWeight: 700 }}>{lang === 'zh' ? 'EN' : '中'}</button>
           <span className="teacher-stat-pill">{data.stats.interventionCount} AI hints</span>
           {data.stats.effectivenessRate !== null && (
             <span className="teacher-stat-pill">{data.stats.effectivenessRate}% effective</span>

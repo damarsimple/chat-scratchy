@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useTeacherAuth } from './TeacherAuth';
+import { useI18n } from '../i18n';
 import { ApiError } from '../api';
 
-// Combined login / register page for teachers.
 export function Login() {
   const { teacher, loading, login, register } = useTeacherAuth();
+  const { t, lang, toggleLang } = useI18n();
   const navigate = useNavigate();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
@@ -14,13 +15,12 @@ export function Login() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Already signed in → go to dashboard.
   if (!loading && teacher) return <Navigate to="/teacher" replace />;
 
   const submit = async () => {
     if (busy) return;
-    if (!email.trim() || !password) { setError('Email and password are required'); return; }
-    if (mode === 'register' && !name.trim()) { setError('Name is required'); return; }
+    if (!email.trim() || !password) { setError(t('Email and password are required')); return; }
+    if (mode === 'register' && !name.trim()) { setError(t('Name is required')); return; }
     setBusy(true);
     setError('');
     try {
@@ -28,9 +28,9 @@ export function Login() {
       else await register(email.trim(), password, name.trim());
       navigate('/teacher', { replace: true });
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) setError('Invalid email or password');
-      else if (e instanceof ApiError && e.status === 409) setError('That email is already registered');
-      else setError('Something went wrong, please try again');
+      if (e instanceof ApiError && e.status === 401) setError(t('Invalid email or password'));
+      else if (e instanceof ApiError && e.status === 409) setError(t('That email is already registered'));
+      else setError(t('Something went wrong, please try again'));
     } finally {
       setBusy(false);
     }
@@ -39,13 +39,16 @@ export function Login() {
   return (
     <div className="teacher-auth-page">
       <div className="teacher-auth-card">
-        <h1>Teacher {mode === 'login' ? 'Login' : 'Sign Up'}</h1>
-        <p className="teacher-auth-sub">Scratchy classroom dashboard</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h1 style={{ margin: 0 }}>{t('Teacher Login')}</h1>
+          <button className="teacher-link-btn" onClick={toggleLang} style={{ fontSize: 13, fontWeight: 700 }}>{lang === 'zh' ? 'EN' : '中'}</button>
+        </div>
+        <p className="teacher-auth-sub">{t('Scratchy classroom dashboard')}</p>
 
         {mode === 'register' && (
           <input
             className="teacher-input"
-            placeholder="Your name"
+            placeholder={t('Your name')}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -61,7 +64,7 @@ export function Login() {
         <input
           className="teacher-input"
           type="password"
-          placeholder="Password"
+          placeholder={t('Password')}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
@@ -70,14 +73,14 @@ export function Login() {
         {error && <div className="teacher-auth-error">{error}</div>}
 
         <button className="teacher-btn-primary" onClick={() => void submit()} disabled={busy}>
-          {busy ? '…' : mode === 'login' ? 'Log in' : 'Create account'}
+          {busy ? '…' : mode === 'login' ? t('Log in') : t('Create account')}
         </button>
 
         <button
           className="teacher-link-btn"
           onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}
         >
-          {mode === 'login' ? 'Need an account? Sign up' : 'Have an account? Log in'}
+          {mode === 'login' ? t('Need an account? Sign up') : t('Have an account? Log in')}
         </button>
       </div>
     </div>

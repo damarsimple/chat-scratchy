@@ -283,7 +283,14 @@
 .teacher-control-btn.primary { background: #6d28d9; color: #fff; border-color: #6d28d9; }
 .teacher-control-btn.primary:hover { background: #5b21b6; }
 .teacher-control-sep { width: 1px; align-self: stretch; background: #e5e7eb; margin: 0 2px; }
-.teacher-control-msg { font-size: 12px; color: #6d28d9; margin-left: auto; }
+.teacher-control-msg {
+  position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+  background: #6d28d9; color: #fff; padding: 10px 20px; border-radius: 10px;
+  font-size: 14px; font-weight: 600; z-index: 9999;
+  box-shadow: 0 4px 16px rgba(109,40,217,0.3);
+  animation: teacher-msg-in 0.2s ease-out;
+}
+@keyframes teacher-msg-in { from { opacity: 0; transform: translateX(-50%) translateY(-8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 
 /* Teacher-managed objectives editor */
 .teacher-objectives { margin-bottom: 16px; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; background: #fff; }
